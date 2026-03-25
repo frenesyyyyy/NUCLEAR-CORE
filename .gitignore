@@ -1,0 +1,7 @@
+.env
+chroma_db/
+hf_cache/
+geo_audit.db
+exports/
+__pycache__/
+*.pyc
