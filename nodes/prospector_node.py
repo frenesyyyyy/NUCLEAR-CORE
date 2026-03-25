@@ -66,7 +66,7 @@ def process(state: dict) -> dict:
     
     external_sources = []
     prospector_notes = "Default fallbacks used."
-    external_data_quality = "HIGH"
+    external_data_quality = "high"
     
     url = state.get("url", "Unknown")
     locale = state.get("locale", "en")
@@ -97,12 +97,18 @@ def process(state: dict) -> dict:
         if is_local:
             serper_query = f"eccellenze per {target_industry} a {discovered_location}"
         else:
-            serper_query = f"eccellenze e leader per {target_industry}"
+            if scale_level == "Global":
+                serper_query = f"top brand mondiali {target_industry}"
+            else:
+                serper_query = f"eccellenze e leader per {target_industry}"
     else:
         if is_local:
             serper_query = f"top {target_industry} businesses in {discovered_location}"
         else:
-            serper_query = f"top {target_industry} industry leaders"
+            if scale_level == "Global":
+                serper_query = f"top global {target_industry} industry leaders"
+            else:
+                serper_query = f"top {target_industry} industry leaders"
             
     def is_valid_result(res):
         link = res.get("link", "").lower()
@@ -128,12 +134,14 @@ def process(state: dict) -> dict:
             external_sources = [r.get("link") for r in filtered_results if r.get("link")]
             
             if len(filtered_results) < 4:
-                external_data_quality = "LOW"
+                external_data_quality = "low"
+            elif len(filtered_results) < 7:
+                external_data_quality = "medium"
             break
         else:
             console.print("[yellow]Serper retry...[/yellow]")
             if attempt == 1:
-                external_data_quality = "LOW"
+                external_data_quality = "low"
 
     # Single-Stage Tier-1 GEO Intelligence Call
     system_role = "You are a Tier-1 GEO Intelligence Analyst. You return ONLY strict JSON. No conversational filler."
@@ -166,26 +174,37 @@ def process(state: dict) -> dict:
     # Extract JSON
     try:
         if "INSUFFICIENT" in raw_intelligence or "insufficient" in raw_intelligence.lower():
-            external_data_quality = "LOW"
+            external_data_quality = "low"
             
         match = re.search(r'```(?:json)?(.*?)```', raw_intelligence, re.DOTALL | re.IGNORECASE)
         json_str = match.group(1).strip() if match else raw_intelligence.strip()
         intel_data = json.loads(json_str)
         
-        raw_data_complete["competitor_entities"] = [str(e).strip() for e in intel_data.get("competitor_entities", [])]
-        raw_data_complete["authority_entities"] = [str(e).strip() for e in intel_data.get("authority_entities", [])]
+        def normalize_entity(e):
+            return re.sub(r'[^\w\s]', '', str(e).lower().strip())
+            
+        directories = ['yelp', 'tripadvisor', 'amazon', 'booking', 'expedia', 'zillow', 'yellowpages', 'facebook', 'thefork', 'justeat', 'deliveroo', 'glovo', 'trustpilot', 'ebay', 'etsy']
+        
+        raw_comp = [str(e).strip() for e in intel_data.get("competitor_entities", [])]
+        raw_auth = [str(e).strip() for e in intel_data.get("authority_entities", [])]
+        
+        raw_data_complete["competitor_entities"] = [normalize_entity(e) for e in raw_comp if not any(d in e.lower() for d in directories)]
+        raw_data_complete["authority_entities"] = [normalize_entity(e) for e in raw_auth if not any(d in e.lower() for d in directories)]
         raw_data_complete["topic_gaps"] = intel_data.get("topic_gaps", [])
         raw_data_complete["faq_patterns"] = intel_data.get("faq_patterns", [])
         raw_data_complete["perplexity_summary"] = f"Intelligence Mapping Success: {len(raw_data_complete['competitor_entities'])} competitors."
         
-        if len(raw_data_complete['competitor_entities']) < 2:
-            external_data_quality = "LOW"
+        comp_len = len(raw_data_complete['competitor_entities'])
+        if comp_len < 2:
+            external_data_quality = "low"
+        elif comp_len < 5 and external_data_quality != "low":
+            external_data_quality = "medium"
             
-        console.print(f"[green]Prospector Node[/green]: Successfully mapped {len(raw_data_complete['competitor_entities'])} competitors and {len(raw_data_complete['authority_entities'])} authority nodes.")
+        console.print(f"[green]Prospector Node[/green]: Successfully mapped {comp_len} competitors and {len(raw_data_complete['authority_entities'])} authority nodes.")
     except Exception as e:
         console.print(f"[bold red]Agency Intelligence Parsing Failed[/bold red]: {e}")
         raw_data_complete["perplexity_summary"] = "Intelligence Retrieval Failed."
-        external_data_quality = "LOW"
+        external_data_quality = "low"
 
     raw_data_complete["source_urls"] = external_sources
     raw_data_complete["raw_notes"] = [raw_intelligence]

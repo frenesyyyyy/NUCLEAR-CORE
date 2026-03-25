@@ -103,7 +103,7 @@ def process(state: dict) -> dict:
         
         # Determine labels based on locale
         if locale == "it":
-            title = "Report Ufficiale Audit GEO v4.2 (Agency-Grade)"
+            title = "Report Ufficiale Audit GEO v4.4 (Agency-Grade)"
             url_label = "URL Destinazione"
             ind_label = "Settore"
             aud_label = "Pubblico Principale"
@@ -111,15 +111,18 @@ def process(state: dict) -> dict:
             ent_label = "Entity Consensus"
             info_label = "Information Gain (Mancanze/Upside)"
             risk_label = "Hallucination Risk (Rischio Errori AI)"
-            conf_label = "Affidabilità Dati d'Estrazione"
+            conf_label = "Affidabilità Dati d'Estrazione (Confidence Score)"
+            ev_label = "Sintesi Copertura Evidenze (Evidence Coverage)"
             cit_label = "Stato Citazioni"
             read_label = "Livello Readiness"
             roi_label = "Proiezioni Limitate & Validazione ROI"
             rec_label = "GEO Strategy: Recommendation Pack Dettagliato"
             strat_label = "Evidenze Strutturate & Content Strategy"
-            lim_label = "Limitazioni nell'Analisi"
+            lim_label = "Limitazioni nell'Analisi & Dati Mancanti"
+            based_on_ev = "Basato sulle evidenze disponibili..."
+            lim_data = "I dati limitati indicano..."
         else:
-            title = "Official GEO Audit Report v4.2 (Agency-Grade)"
+            title = "Official GEO Audit Report v4.4 (Agency-Grade)"
             url_label = "Target URL"
             ind_label = "Industry"
             aud_label = "Target Audience"
@@ -127,13 +130,16 @@ def process(state: dict) -> dict:
             ent_label = "Entity Consensus"
             info_label = "Information Gain (Content Upside)"
             risk_label = "Hallucination Risk"
-            conf_label = "Extraction Confidence Score"
+            conf_label = "Data Confidence Score"
+            ev_label = "Evidence Coverage Summary"
             cit_label = "Citation Status"
             read_label = "Readiness Level"
             roi_label = "Bounded Lift Projection & ROI"
             rec_label = "Agency Recommendation Pack"
             strat_label = "Structured Evidence & Content Strategist"
-            lim_label = "Evidence Limitations"
+            lim_label = "Limitations & Missing Data"
+            based_on_ev = "Based on available evidence..."
+            lim_data = "Limited data suggests..."
             
         metrics = state.get("metrics", {})
         confidence = state.get("confidence_score", 0)
@@ -141,7 +147,29 @@ def process(state: dict) -> dict:
         limitations = ""
         if confidence < 60:
             limit_msg = state.get("evidence_limitations", "Low confidence due to parsing limitations or thin content.")
-            limitations = f"\n> **⚠️ {lim_label}:** {limit_msg} Metrics may be volatile.\n"
+            limitations = f"\n> **⚠️ {lim_label}:** {limit_msg} Metrics may be volatile. {lim_data}\n"
+        else:
+            limitations = f"\n> **ℹ️ {lim_label}:** {based_on_ev}\n"
+            
+        schema_types = state.get("schema_type_counts", {})
+        schema_str = ", ".join([f"{k} ({v})" for k,v in schema_types.items()]) if schema_types else "None detected"
+        
+        try:
+            rec_data = json.loads(state.get("geo_recommendation_pack", "[]"))
+            if isinstance(rec_data, list) and len(rec_data) > 0:
+                rec_md = ""
+                for r in rec_data:
+                    r_title = r.get("title", "Azione Strategica")
+                    r_rat = r.get("rationale", "")
+                    r_pri = r.get("priority", "Medium")
+                    r_type = r.get("implementation_type", "Content")
+                    
+                    pri_icon = "🔴" if "high" in r_pri.lower() else ("🟡" if "med" in r_pri.lower() else "🟢")
+                    rec_md += f"### {pri_icon} {r_title}\n**Priority:** {r_pri} | **Type:** {r_type}\n{r_rat}\n\n"
+            else:
+                rec_md = str(state.get("geo_recommendation_pack", "N/A"))
+        except:
+            rec_md = str(state.get("geo_recommendation_pack", "N/A"))
             
         md_content = f"""# ☢️ NUCLEAR AI: {title}
 
@@ -149,9 +177,11 @@ def process(state: dict) -> dict:
 **Brand:** {state.get("brand_name", "N/A")} ({state.get("scale_level", "National")})  
 **{ind_label}:** {state.get("target_industry", "N/A")}  
 **{read_label}:** {metrics.get("Citation Readiness", "N/A")}  
-**{conf_label}:** {confidence}/100
-{limitations}
+
 ---
+
+## 🛡️ {conf_label}: {confidence}/100
+{limitations}
 
 ## 📊 {met_label}
 - **{ent_label}:** {metrics.get("Entity Consensus", 0)}% (Brand entity detection)
@@ -161,8 +191,8 @@ def process(state: dict) -> dict:
 
 ---
 
-## 🧠 {strat_label}
-- **Schema detected:** {", ".join(state.get("schema_objects", [])) if state.get("schema_objects") else "None detected"}
+## 🧠 {strat_label} & {ev_label}
+- **Schema detected:** {schema_str}
 - **E-E-A-T Gaps:** {", ".join(state.get("e_e_a_t_gaps", [])) if state.get("e_e_a_t_gaps") else "None detected"}
 - **Original IP:** {", ".join(state.get("original_frameworks", [])) if state.get("original_frameworks") else "None detected"}
 
@@ -176,13 +206,13 @@ def process(state: dict) -> dict:
 ---
 
 ## 📋 {rec_label}
-{state.get("geo_recommendation_pack", "N/A")}
+{rec_md}
 
 ### Targeted Expansions:
 {chr(10).join([f"- {item}" for item in state.get("recommended_content", [])]) if state.get("recommended_content") else "N/A"}
 
 ---
-*Report generated by Nuclear AI GEO Optimizer v4.2 Agency-Grade on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
+*Report generated by Nuclear AI GEO Optimizer v4.4 Agency-Grade on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
 """
         with open(md_file, "w", encoding="utf-8") as f:
             f.write(md_content)

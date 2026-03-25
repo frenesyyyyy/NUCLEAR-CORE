@@ -53,7 +53,7 @@ def get_latest_export():
 
 def main():
     st.title("☢️ Nuclear AI GEO Optimizer")
-    st.markdown("### Client Audit Presentation Dashboard")
+    st.markdown("### Client Audit Presentation Dashboard (v4.4 Agency-Grade)")
     
     st.sidebar.header("Data Source")
     
@@ -127,44 +127,79 @@ def main():
         col4.write(f"**Readiness:** {metrics.get('Citation Readiness', 'N/A')}")
         
         st.markdown("---")
-        st.header(l["metrics"])
         
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        tab_overview, tab_evidence, tab_recs, tab_val = st.tabs(["Overview & Metrics", "Evidence Tracking", "Recommendations", "Validation & ROI"])
         
-        with m1:
-            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["entity_consensus"]}</div><div class="metric-value">{metrics.get("Entity Consensus", "0")}%</div></div>', unsafe_allow_html=True)
-        with m2:
-            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["info_gain"]}</div><div class="metric-value">{metrics.get("Information Gain", "0")}%</div></div>', unsafe_allow_html=True)
-        with m3:
-            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["confidence_score"]}</div><div class="metric-value">{confidence}/100</div></div>', unsafe_allow_html=True)
-        with m4:
-            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["hallucination_risk"]}</div><div class="metric-value">{metrics.get("Hallucination Risk", "0")}%</div></div>', unsafe_allow_html=True)
-        with m5:
-            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["citation_status"]}</div><div class="metric-value" style="font-size:20px;">{data.get("citation_status", "N/A")}</div></div>', unsafe_allow_html=True)
-        with m6:
-            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["projected_lift"]}</div><div class="metric-value" style="font-size:20px;">{data.get("projected_traffic_lift", "N/A")}</div></div>', unsafe_allow_html=True)
-
-        st.markdown("---")
+        with tab_overview:
+            st.header(l["metrics"])
+            m1, m2, m3, m4, m5, m6 = st.columns(6)
+            with m1:
+                st.markdown(f'<div class="metric-box"><div class="metric-title">{l["entity_consensus"]}</div><div class="metric-value">{metrics.get("Entity Consensus", "0")}%</div></div>', unsafe_allow_html=True)
+            with m2:
+                st.markdown(f'<div class="metric-box"><div class="metric-title">{l["info_gain"]}</div><div class="metric-value">{metrics.get("Information Gain", "0")}%</div></div>', unsafe_allow_html=True)
+            with m3:
+                st.markdown(f'<div class="metric-box"><div class="metric-title">{l["confidence_score"]}</div><div class="metric-value">{confidence}/100</div></div>', unsafe_allow_html=True)
+            with m4:
+                st.markdown(f'<div class="metric-box"><div class="metric-title">{l["hallucination_risk"]}</div><div class="metric-value">{metrics.get("Hallucination Risk", "0")}%</div></div>', unsafe_allow_html=True)
+            with m5:
+                st.markdown(f'<div class="metric-box"><div class="metric-title">{l["citation_status"]}</div><div class="metric-value" style="font-size:20px;">{data.get("citation_status", "N/A")}</div></div>', unsafe_allow_html=True)
+            with m6:
+                st.markdown(f'<div class="metric-box"><div class="metric-title">{l["projected_lift"]}</div><div class="metric-value" style="font-size:20px;">{data.get("projected_traffic_lift", "N/A")}</div></div>', unsafe_allow_html=True)
         
-        col_rec, col_val = st.columns([2, 1])
-        
-        with col_rec:
-            st.header(l["recommendation"])
-            recommendations = data.get("geo_recommendation_pack", "No recommendations available.")
-            st.markdown(f'<div class="recommendation-box">{recommendations}</div>', unsafe_allow_html=True)
+        with tab_evidence:
+            st.header("Structured Evidence" if locale == "en" else "Evidenze Strutturate")
             
-            # Content strategist insights
+            schema_types = data.get("schema_type_counts", {})
+            st.subheader("Detected Schema" if locale == "en" else "Schema Rilevati")
+            if schema_types:
+                st.markdown(", ".join([f"{k} ({v})" for k,v in schema_types.items()]))
+            else:
+                st.markdown("None detected")
+                
+            auth_signals = data.get("brand_authority_signals", {})
+            if auth_signals:
+                st.subheader("Brand Authority Signals" if locale == "en" else "Segnali Autorità Brand")
+                st.json(auth_signals)
+            
+            # Content depth
+            depth = data.get("client_content_depth", {})
+            st.subheader("Content Extraction Depth")
+            st.json(depth)
+            
+            with st.expander(l["raw_data"]):
+                st.json(data)
+                
+        with tab_recs:
+            st.header(l["recommendation"])
+            recommendations_raw = data.get("geo_recommendation_pack", "[]")
+            try:
+                rec_data = json.loads(recommendations_raw)
+                if isinstance(rec_data, list) and rec_data:
+                    for r in rec_data:
+                        r_title = r.get("title", "Azione Strategica")
+                        r_rat = r.get("rationale", "")
+                        r_pri = r.get("priority", "Medium")
+                        r_type = r.get("implementation_type", "Content")
+                        pri_icon = "🔴" if "high" in r_pri.lower() else ("🟡" if "med" in r_pri.lower() else "🟢")
+                        
+                        st.markdown(f'''
+                        <div class="recommendation-box">
+                            <h4>{pri_icon} {r_title}</h4>
+                            <p><strong>Priority:</strong> {r_pri} | <strong>Type:</strong> {r_type}</p>
+                            <p>{r_rat}</p>
+                        </div>
+                        ''', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div class="recommendation-box">{recommendations_raw}</div>', unsafe_allow_html=True)
+            except:
+                st.markdown(f'<div class="recommendation-box">{recommendations_raw}</div>', unsafe_allow_html=True)
+            
             if data.get("recommended_content"):
                 st.subheader("Agency Content Strategy" if locale == "en" else "Strategia Contenuti Agency")
                 for item in data.get("recommended_content", []):
                     st.markdown(f"- {item}")
                     
-            schema_objects = data.get("schema_objects", [])
-            if schema_objects:
-                st.subheader("Detected Schema" if locale == "en" else "Schema Rilevati")
-                st.markdown(", ".join(schema_objects))
-            
-        with col_val:
+        with tab_val:
             st.header(l["roi_verified"])
             if data.get("roi_verified"):
                 st.success("✅ ROI Positive / Verified" if locale == "en" else "✅ ROI Positivo / Verificato")
@@ -174,9 +209,6 @@ def main():
             val_notes = data.get("validator_notes", "")
             if val_notes:
                 st.info(val_notes)
-
-        with st.expander(l["raw_data"]):
-            st.json(data)
 
 if __name__ == "__main__":
     main()

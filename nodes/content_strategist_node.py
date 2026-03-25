@@ -84,7 +84,15 @@ def process(state: dict) -> dict:
             contents=prompt,
             config={"response_mime_type": "application/json"}
         )
-        output = json.loads(response.text)
+        clean_text = response.text.strip()
+        if clean_text.startswith("```json"):
+            clean_text = clean_text[7:]
+        if clean_text.startswith("```"):
+            clean_text = clean_text[3:]
+        if clean_text.endswith("```"):
+            clean_text = clean_text[:-3]
+            
+        output = json.loads(clean_text.strip())
         
         original_frameworks = output.get("original_frameworks", [])
         e_e_a_t_gaps = output.get("e_e_a_t_gaps", [])

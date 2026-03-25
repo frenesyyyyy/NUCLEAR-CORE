@@ -38,28 +38,77 @@ def process(state: dict) -> dict:
     discovered_location = state.get("discovered_location", "Worldwide")
     lang_name = "Italian" if locale == "it" else "English"
     
-    # Calculate confidence score early
+    # v4.4 Brand Authority Signals
+    schema_type_counts = state.get("schema_type_counts", {})
+    hreflang_count = state.get("hreflang_count", 0)
+    
+    authority_signals = []
+    auth_score = 0
+    if hreflang_count > 3:
+        authority_signals.append(f"{hreflang_count} hreflang international targets")
+        auth_score += 2
+    
+    if "Organization" in schema_type_counts or "WebSite" in schema_type_counts:
+        authority_signals.append("Strong Organization/WebSite Schema Identity")
+        auth_score += 2
+        
+    if "Product" in schema_type_counts or "Offer" in schema_type_counts or "AggregateOffer" in schema_type_counts:
+        authority_signals.append("Commerce Schema Present")
+        auth_score += 1
+        
+    if scale_level == "Global":
+        authority_signals.append("Self-identified Global Market Scale")
+        auth_score += 1
+        
+    authority_strength = "high" if auth_score >= 4 else ("medium" if auth_score >= 2 else "low")
+    is_global_brand = (authority_strength == "high") and (hreflang_count > 0 or scale_level == "Global")
+    
+    brand_authority_signals = {
+        "is_global_brand": is_global_brand,
+        "authority_strength": authority_strength,
+        "score": auth_score,
+        "signals": authority_signals
+    }
+    state["brand_authority_signals"] = brand_authority_signals
+
+    # v4.4 Calculate strict confidence score
     extraction_warnings = state.get("extraction_warnings", [])
     structured_data = state.get("structured_data_extract", [])
     depth = state.get("client_content_depth", {})
     
-    confidence_points = 100
-    if isinstance(depth, dict):
-        quality = depth.get("extraction_quality", "Low")
-        if quality == "Low": confidence_points -= 40
-        elif quality == "Medium": confidence_points -= 20
-        if depth.get("js_heavy_detected", False): confidence_points -= 20
-    else:
-        confidence_points -= 40 # fallback
-        
-    if not structured_data: confidence_points -= 10
-    if extraction_warnings: confidence_points -= 10
+    quality = depth.get("extraction_quality", "low") if isinstance(depth, dict) else "low"
+    schema_blk = depth.get("schema_block_count", 0) if isinstance(depth, dict) else 0
+    words = depth.get("word_count", 0) if isinstance(depth, dict) else 0
+    pages = depth.get("page_count", 1) if isinstance(depth, dict) else 1
+    external_data_quality = state.get("external_data_quality", "high")
     
-    external_data_quality = state.get("external_data_quality", "HIGH")
-    if external_data_quality == "LOW":
-        confidence_points -= 30
+    # Base Weights
+    conf_base = 0
+    conf_base += 40 if quality == "high" else (20 if quality == "medium" else 5)
+    conf_base += min(20, schema_blk * 5)
+    conf_base += min(20, int((words / 1000) * 10 + (pages * 5))) 
+    conf_base += 20 if external_data_quality == "high" else (10 if external_data_quality == "medium" else 5)
+    
+    confidence_score = conf_base
+    
+    # Strict Caps (v4.4 bounds)
+    if pages == 1:
+        confidence_score = min(confidence_score, 65)
+    if external_data_quality == "low":
+        confidence_score = min(confidence_score, 60)
+    if schema_blk < 1:
+        confidence_score = min(confidence_score, 70)
+    if quality in ["low", "medium"]:
+        confidence_score = min(confidence_score, 75)
         
-    confidence_score = max(10, min(100, confidence_points))
+    if extraction_warnings: confidence_score -= 10
+    
+    # Exceeding 85 requires absolute strength
+    if confidence_score > 85:
+        if pages < 3 or quality != "high" or schema_blk < 2 or external_data_quality == "low":
+            confidence_score = 85
+            
+    confidence_score = max(10, min(100, confidence_score))
     
     gemini_key = os.getenv("GEMINI_API_KEY")
     perplexity_key = os.getenv("PERPLEXITY_API_KEY")
@@ -170,45 +219,64 @@ def process(state: dict) -> dict:
 
         visibility_score = min(100, (visibility_points / 140) * 100)
 
-        # 4. AUTHORITY MATCH (10% Weight) - Normalized Fuzzy Match
+        # 4. AUTHORITY MATCH (10% Weight) - Normalized Fuzzy Match v4.3
         raw_data = state.get("raw_data_complete", {})
         authority_ents = raw_data.get("authority_entities", [])
         competitor_ents = raw_data.get("competitor_entities", [])
+        total_ents = authority_ents + competitor_ents
         
         def fuzzy_match(entity, text):
             e_norm = re.sub(r'[^\w\s]', '', str(entity).lower().strip())
+            # strip suffix noise
+            suffixes = [" spa", " s.p.a.", " ltd", " inc", " srl", " llc", " gmbh", " s.r.l."]
+            for s in suffixes:
+                if e_norm.endswith(s):
+                    e_norm = e_norm[:-len(s)].strip()
+                    
             t_norm = re.sub(r'[^\w\s]', '', text)
             if not e_norm: return False
             if e_norm in t_norm: return True
             parts = e_norm.split()
-            if len(parts) > 1 and sum(1 for p in parts if p in t_norm) >= len(parts) * 0.5:
+            if len(parts) > 1 and sum(1 for p in parts if p in t_norm) >= len(parts) * 0.6:
                 return True
             return False
             
-        matched_auth = sum(1 for a in authority_ents if fuzzy_match(a, content_lower))
-        matched_comp = sum(1 for c in competitor_ents if fuzzy_match(c, content_lower))
+        matched_ents = sum(1 for e in total_ents if fuzzy_match(e, content_lower))
+        match_ratio = matched_ents / max(len(total_ents), 1)
         
-        auth_ratio = matched_auth / max(len(authority_ents), 1)
-        comp_ratio = matched_comp / max(len(competitor_ents), 1)
+        base_consensus = 15 + (match_ratio * 70)
         
-        authority_match_score = (auth_ratio * 70) + (comp_ratio * 30)
-        
-        if authority_match_score > 0:
-            authority_match_score = 15 + (authority_match_score * 0.7)
-        if authority_match_score > 90 and auth_ratio < 0.9:
-            authority_match_score = 85
+        # Floor Protection for strong brands
+        if is_global_brand or authority_strength == "high":
+            base_consensus = max(base_consensus, 60)
             
-        authority_match_score = max(5, min(95, authority_match_score))
+        authority_match_score = max(15, min(95, int(base_consensus)))
 
         # 5. FINAL AGENCY VISIBILITY SCORE
         total_visibility = (grounding_score * 0.7) + (visibility_score * 0.2) + (authority_match_score * 0.1)
         
-        metrics["Hallucination Risk"] = max(0, 100 - int(total_visibility))
+        # v4.4 Hallucination Risk
+        base_risk = 100 - int(total_visibility)
+        
+        if authority_strength == "high" and external_data_quality != "low":
+            risk_score = min(base_risk, 30)
+        elif authority_strength == "high" and external_data_quality == "low":
+            risk_score = min(base_risk, 55)
+        elif authority_strength == "low" and external_data_quality == "low" and schema_blk == 0:
+            risk_score = max(base_risk, 80)
+        else:
+            rm = 0.7 if quality == "high" else (0.85 if quality == "medium" else 1.0)
+            risk_score = int(base_risk * rm)
+            
+        risk_score = max(5, min(95, risk_score))
+        metrics["Hallucination Risk"] = risk_score
+        
         metrics["Entity Consensus"] = int(authority_match_score)
         metrics["Citation Readiness"] = "Enterprise-Ready" if total_visibility > 92 else "Agency-Ready" if total_visibility > 75 else "Needs Work"
         
-        # Information Gain Calculation (Upside from MISSING topics)
+        # v4.3 Information Gain Calculation (Upside from MISSING topics)
         topic_gaps = raw_data.get("topic_gaps", [])
+        total_possible = max(len(topic_gaps[:10]), 1)
         gaps_missing = 0
         for gap in topic_gaps[:10]:
             try:
@@ -217,13 +285,9 @@ def process(state: dict) -> dict:
                     gaps_missing += 1
             except: pass
             
-        raw_gain = (gaps_missing / max(len(topic_gaps[:10]), 1)) * 100
-        ig = int(raw_gain * (confidence_score / 100))
-        
-        if confidence_score < 40:
-            ig = min(ig, 65)
-        elif confidence_score < 75:
-            ig = min(ig, 85)
+        ig = int(100 * (gaps_missing / total_possible))
+        if confidence_score < 50:
+            ig = min(ig, 40)
             
         if ig == 0 and len(topic_gaps) > 0:
             ig = 5
@@ -237,12 +301,12 @@ def process(state: dict) -> dict:
         else: citation_status = "Low Verification"
         
         ig = metrics["Information Gain"]
-        if confidence_score < 40:
+        if confidence_score < 40 or citation_status == "Low Verification":
             projected_traffic_lift = "0–5%"
         elif confidence_score < 75:
-            projected_traffic_lift = "8–18%" if ig > 40 else "3–8%"
+            projected_traffic_lift = "3–8%" if ig < 40 else "8–18%"
         else:
-            projected_traffic_lift = "18–30%" if ig > 60 else "8–18%"
+            projected_traffic_lift = "8–18%" if ig < 60 else "18–30%"
 
     except Exception as e:
         console.print(f"[bold red]Researcher Logic Failure: {e}[/bold red]")
@@ -258,21 +322,38 @@ def process(state: dict) -> dict:
         
         Write an Agency-Level recommendation pack in {lang_name} using STRICTLY the evidence provided. 
         MANDATORY RULES:
-        - DO NOT invent or mention technical SEO issues (like crawl budget, toxic backlinks, penalties, severe SEO failures) unless explicitly present in the data.
+        - DO NOT invent or mention technical SEO issues (like crawl budget, toxic backlinks, penalties) unless explicitly present in the data.
         - Use agency-safe language like "limited evidence suggests", "inferred opportunity", or "manual verification recommended".
-        - If confidence is below 50, ensure recommendations are extremely conservative.
+        - If evidence is missing, state it clearly. NEVER invent facts.
         
-        Ensure your response explicitly separates into:
-        1. Observed findings 
-        2. Inferred opportunities
-        3. Unknown / needs manual verification
-        
-        Provide 3-5 conservative, factual recommendations in professional Markdown.
+        ALL recommendations MUST be returned STRICTLY as a JSON array of objects, exactly like this:
+        [
+          {
+            "title": "Clear Actionable Title",
+            "rationale": "Why this matters based on the data",
+            "priority": "High|Medium|Low",
+            "implementation_type": "Technical|Content|Authority"
+          }
+        ]
         """
         gemini_client = genai.Client(api_key=gemini_key)
-        res_rec = gemini_client.models.generate_content(model='gemini-2.5-flash-lite', contents=rec_prompt)
-        geo_recommendation_pack = res_rec.text
-        research_output = f"v4.2 Agency-Grade Analysis Complete. Readiness: {metrics['Citation Readiness']}."
+        res_rec = gemini_client.models.generate_content(model='gemini-2.5-flash-lite', contents=rec_prompt, config={"response_mime_type": "application/json"})
+        
+        try:
+            clean_text = res_rec.text.strip()
+            if clean_text.startswith("```json"):
+                clean_text = clean_text[7:]
+            if clean_text.startswith("```"):
+                clean_text = clean_text[3:]
+            if clean_text.endswith("```"):
+                clean_text = clean_text[:-3]
+                
+            geo_recommendation_pack_json = json.loads(clean_text.strip())
+            geo_recommendation_pack = json.dumps(geo_recommendation_pack_json, indent=2)
+        except:
+            geo_recommendation_pack = res_rec.text
+            
+        research_output = f"v4.3 Agency-Grade Analysis Complete. Readiness: {metrics['Citation Readiness']}."
     except Exception as e:
         console.print(f"[yellow]Recommendation generation skipped or failed: {e}[/yellow]")
         pass

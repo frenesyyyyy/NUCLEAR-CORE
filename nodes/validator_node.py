@@ -27,12 +27,9 @@ def process(state: dict) -> dict:
         consensus = metrics.get("Entity Consensus", 0)
         confidence = state.get("confidence_score", 0)
         
-        if confidence < 50:
+        if confidence < 50 or citation_status == "Low Verification":
             roi_verified = False
-            validator_notes = f"Confidence score ({confidence}/100) is too low to project ROI securely. Need stronger structured extraction."
-        elif citation_status == "Low Verification":
-            roi_verified = False
-            validator_notes = "Data verification is too low (Low Verification) to project confident ROI."
+            validator_notes = "Low confidence due to insufficient structured evidence"
         elif info_gain > 10 and citation_status in ["Verified", "Partially Verified"]:
             roi_verified = True
             validator_notes = "Strong incremental opportunity identified. Content gap validation provides heuristically plausible ROI."

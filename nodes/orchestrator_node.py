@@ -106,6 +106,21 @@ def process(state: dict) -> dict:
                 console.print("[yellow]Waiting 5 seconds before retry...[/yellow]")
                 time.sleep(5)
     
+    # v4.3 Global vs Local Fix (Critical Bug)
+    is_global_heuristic = False
+    if scale_level == "Global" or "Worldwide" in discovered_location:
+        is_global_heuristic = True
+    
+    # If the domain is a major generic TLD and the LLM didn't force a strict local town
+    global_tlds = [".com", ".net", ".org", ".io", ".co", ".ai"]
+    if any(tld + "/" in url.lower() or url.lower().endswith(tld) for tld in global_tlds) and scale_level != "Local":
+        is_global_heuristic = True
+
+    if is_global_heuristic:
+        scale_level = "Global"
+        type_config["location_enforce"] = False
+        console.print("[cyan]Orchestrator Node[/cyan]: Global heuristic triggered. Overriding location_enforce to False.")
+
     # Apply to state
     state["target_industry"] = target_industry
     state["brand_name"] = brand_name
