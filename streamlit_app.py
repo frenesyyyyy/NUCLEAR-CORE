@@ -85,6 +85,7 @@ def main():
                 "entity_consensus": "Entity Consensus",
                 "info_gain": "Information Gain",
                 "hallucination_risk": "Hallucination Risk",
+                "confidence_score": "Extraction Confidence",
                 "citation_status": "Citation Status",
                 "projected_lift": "Projected Traffic Lift",
                 "roi_verified": "ROI Viability",
@@ -100,6 +101,7 @@ def main():
                 "entity_consensus": "Consenso Entità",
                 "info_gain": "Guadagno Informativo",
                 "hallucination_risk": "Rischio Allucinazione",
+                "confidence_score": "Affidabilità Estrazione",
                 "citation_status": "Stato Citazioni",
                 "projected_lift": "Aumento Traffico Previsto",
                 "roi_verified": "Sostenibilità ROI",
@@ -109,29 +111,38 @@ def main():
         
         l = labels.get(locale, labels["en"])
         
+        metrics = data.get("metrics", {})
+        confidence = data.get("confidence_score", 0)
+        
+        # Display warning banner if confidence is low
+        if confidence < 60:
+            limit_msg = data.get("evidence_limitations", "Low confidence due to parsing limitations or thin content.")
+            st.warning(f"⚠️ **{l['confidence_score']} < 60:** {limit_msg} Metrics may be volatile.")
+        
         st.header(l["overview"])
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         col1.write(f"**{l['target_url']}:** {data.get('url', 'N/A')}")
         col2.write(f"**{l['industry']}:** {data.get('target_industry', 'N/A')}")
         col3.write(f"**{l['status']}:** {data.get('status', 'Completed')}")
+        col4.write(f"**Readiness:** {metrics.get('Citation Readiness', 'N/A')}")
         
         st.markdown("---")
         st.header(l["metrics"])
         
-        metrics = data.get("metrics", {})
-        
-        m1, m2, m3, m4, m5 = st.columns(5)
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
         
         with m1:
             st.markdown(f'<div class="metric-box"><div class="metric-title">{l["entity_consensus"]}</div><div class="metric-value">{metrics.get("Entity Consensus", "0")}%</div></div>', unsafe_allow_html=True)
         with m2:
             st.markdown(f'<div class="metric-box"><div class="metric-title">{l["info_gain"]}</div><div class="metric-value">{metrics.get("Information Gain", "0")}%</div></div>', unsafe_allow_html=True)
         with m3:
-            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["hallucination_risk"]}</div><div class="metric-value">{metrics.get("Hallucination Risk", "0")}%</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["confidence_score"]}</div><div class="metric-value">{confidence}/100</div></div>', unsafe_allow_html=True)
         with m4:
-            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["citation_status"]}</div><div class="metric-value" style="font-size:24px;">{metrics.get("Citation Status", "N/A")}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["hallucination_risk"]}</div><div class="metric-value">{metrics.get("Hallucination Risk", "0")}%</div></div>', unsafe_allow_html=True)
         with m5:
-            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["projected_lift"]}</div><div class="metric-value">{data.get("projected_traffic_lift", "N/A")}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["citation_status"]}</div><div class="metric-value" style="font-size:20px;">{data.get("citation_status", "N/A")}</div></div>', unsafe_allow_html=True)
+        with m6:
+            st.markdown(f'<div class="metric-box"><div class="metric-title">{l["projected_lift"]}</div><div class="metric-value" style="font-size:20px;">{data.get("projected_traffic_lift", "N/A")}</div></div>', unsafe_allow_html=True)
 
         st.markdown("---")
         
@@ -141,6 +152,17 @@ def main():
             st.header(l["recommendation"])
             recommendations = data.get("geo_recommendation_pack", "No recommendations available.")
             st.markdown(f'<div class="recommendation-box">{recommendations}</div>', unsafe_allow_html=True)
+            
+            # Content strategist insights
+            if data.get("recommended_content"):
+                st.subheader("Agency Content Strategy" if locale == "en" else "Strategia Contenuti Agency")
+                for item in data.get("recommended_content", []):
+                    st.markdown(f"- {item}")
+                    
+            schema_objects = data.get("schema_objects", [])
+            if schema_objects:
+                st.subheader("Detected Schema" if locale == "en" else "Schema Rilevati")
+                st.markdown(", ".join(schema_objects))
             
         with col_val:
             st.header(l["roi_verified"])

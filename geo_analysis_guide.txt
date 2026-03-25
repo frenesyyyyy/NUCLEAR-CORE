@@ -1,0 +1,69 @@
+# Technical Guide: Nuclear AI GEO Optimizer (GEO Professional Edition)
+
+## 0. Executive Summary
+The **Nuclear AI GEO Optimizer** is a state-of-the-art **Generative Engine Optimization (GEO)** framework. Unlike traditional SEO, which optimizes for search engine algorithms (Google/Bing), this tool optimizes for **Generative Search Engines** (Perplexity, ChatGPT, Gemini, Search-over-AI). It treats LLMs as "knowledge graphs" and aims to increase a brand's **Consensus** and **Authority** within those graphs.
+
+---
+
+## 1. Core Architecture (6-Node Directed Acyclic Graph)
+The system operates as a strictly synchronous pipeline (DAG) with 6 specialized nodes:
+
+| Node | Function | Key Methodology |
+| :--- | :--- | :--- |
+| **Orchestrator** | Intent Analysis | Persona mapping, scale detection (Local/National/Global). |
+| **Content Fetcher** | Web Extraction | Scrapes client domain for AI-grounding anchors. |
+| **Prospector** | Context Discovery | "Waterfall Search" for competitors, standards, and gaps. |
+| **Researcher** | Metrics Engine | RAG-based analysis, embeddings, and "AI Stress Testing". |
+| **Validator** | ROI Projection | Validates if the data supports a positive ROI case. |
+| **Finalizer** | Artifact Export | Generates JSON, SQLite, and Markdown reports. |
+
+---
+
+## 2. The Toolstack (The "Nuclear" Package)
+The project leverages a modern AI-agentic stack:
+- **Vector Engine**: `chromadb` (Persistent local vector storage for RAG).
+- **Embeddings**: `sentence-transformers` (Model: `intfloat/multilingual-e5-large` for multi-locale semantic mapping).
+- **Cerebral Layer**: `google-genai` (Gemini 3.1 Flash/Pro) for strategic synthesis.
+- **SERP Layer**: `serper.dev` (Google Search API) for real-time market snapshots.
+- **Contextual Layer**: `perplexity.ai` (Sonar-Pro) for deep market research and competitor mining.
+- **UI & Dashboard**: `streamlit` for client-grade presentations.
+
+---
+
+## 3. Advanced GEO Techniques & Methodology
+
+### A. Waterfall Discovery Matrix
+The tool does not just "search"; it executes a **multi-stage waterfall** to map a business's "Neighborhood" in the AI latent space:
+1. **Brand Axis**: Identifies proprietary direct competitors.
+2. **Authority Axis**: Identifies industry-defining technical standards, certifications, and specialized protocols.
+3. **Gap & Intent Axis**: Analyzes where competitors have "Information Gaps" that the client can fill to capture AI citations.
+
+### B. AI Stress Testing (Waterfall Gen)
+This is the most advanced feature. The tool generates **4 levels of hyper-specific queries** in the target language to see if AI engines mention the brand "in the wild":
+- **L1 (Niche Intent)**: "What is the best [specific solution] for [specific problem]?"
+- **L2 (Scenario-oriented)**: "How can I solve [problem] in [region]?"
+- **L3 (Regional/Contextual)**: Deeply grounded in the `discovered_location`.
+- **L4 (Technical Authority)**: Probing for specialized technical value.
+
+### C. Trust & Grounding Anchors
+To prevent "AI Hallucinations" where a model makes up details about a business, the system scans for **verified grounding anchors**:
+- **VAT/PIVA Detection**: Proves legal business existence.
+- **PEC/Legal Email**: Verifies administrative validity.
+- **Physical Coordinates**: Scans for "Via/Piazza" (Italian) or "Street/Road" (English) to establish geographic grounding.
+
+---
+
+## 4. Key Performance Indicators (KPIs)
+
+- **Entity Consensus (%)**: Measures how well the client's information matches established "Industry Nodes." Higher consensus = higher likelihood of being cited by AI.
+- **Information Gain (%)**: Measures how much *unique* value the client provides compared to the "market average."
+- **Hallucination Risk (1-100)**: Inversely correlated to the "Trust Score." High risk means the AI has very little grounding and might "imagine" business services.
+- **Citation Status**: A 3-tier status (Verified, Partially Verified, Unverified) determining the brand's reliability in generative engines.
+
+---
+
+## 5. Strategic Recommendations
+The tool outputs a **GEO Recommendation Pack**, which typically includes:
+1. **Entity Injection**: Adding specific "Authority Nodes" to the website metadata.
+2. **Semantic Grounding**: Updating contact/legal pages to include high-trust anchors.
+3. **Gap Filling**: Creating content targeting specific "Information Gaps" identified during the Researcher node.

@@ -22,23 +22,26 @@ def process(state: dict) -> dict:
     else:
         validation = "Complete"
         
-        # Determine ROI Viability based on Information Gain and Entity Consensus
+        # Determine ROI Viability based on Information Gain, Entity Consensus, and Confidence
         info_gain = metrics.get("Information Gain", 0)
         consensus = metrics.get("Entity Consensus", 0)
+        confidence = state.get("confidence_score", 0)
         
-        # If there's an information gap and we mapped entities reasonably
-        if info_gain >= 30 and citation_status in ["Verified", "Partially Verified"]:
-            roi_verified = True
-            validator_notes = "Strong opportunity identified. Content gap provides positive ROI validation."
-        elif info_gain < 30 and consensus > 80:
+        if confidence < 50:
             roi_verified = False
-            validator_notes = "Market is heavily saturated with client entities. Limited low-hanging fruit. ROI viability lower."
+            validator_notes = f"Confidence score ({confidence}/100) is too low to project ROI securely. Need stronger structured extraction."
         elif citation_status == "Low Verification":
             roi_verified = False
-            validator_notes = "Data verification is too low to project confident ROI."
-        else:
+            validator_notes = "Data verification is too low (Low Verification) to project confident ROI."
+        elif info_gain > 10 and citation_status in ["Verified", "Partially Verified"]:
             roi_verified = True
-            validator_notes = "Moderate opportunity. ROI verified based on incremental improvements."
+            validator_notes = "Strong incremental opportunity identified. Content gap validation provides heuristically plausible ROI."
+        elif info_gain <= 10 and consensus > 80:
+            roi_verified = False
+            validator_notes = "Market is heavily saturated with client entities. Limited low-hanging fruit. ROI viability lower."
+        else:
+            roi_verified = False
+            validator_notes = "Opportunity not clear enough from current evidence to verify ROI."
             
     console.print(f"[green]Validator Node[/green]: Validation: {validation} | ROI Verified: {roi_verified}")
     

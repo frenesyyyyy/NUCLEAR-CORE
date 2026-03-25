@@ -12,7 +12,7 @@ console = Console()
 
 def bootstrap_environment():
     """Create necessary directories and download resources."""
-    console.print("[bold cyan]Nuclear AI GEO Optimizer v3.4[/bold cyan] - Bootstrapping environment...", style="cyan")
+    console.print("[bold cyan]Nuclear AI GEO Optimizer v4.1 Agency-Grade[/bold cyan] - Bootstrapping environment...", style="cyan")
     
     # Create nodes/ folder if missing
     os.makedirs("nodes", exist_ok=True)
@@ -34,10 +34,10 @@ def bootstrap_environment():
 
 def parse_args():
     """Parse CLI arguments."""
-    parser = argparse.ArgumentParser(description="NUCLEAR AI GEO Optimizer v3.4 MVP")
+    parser = argparse.ArgumentParser(description="NUCLEAR AI GEO Optimizer v4.1 Agency-Grade")
     parser.add_argument("--url", required=True, help="Target website URL")
     parser.add_argument("--locale", required=True, choices=["en", "it"], help="Locale (en or it)")
-    parser.add_argument("--typo", "--type", choices=["tech", "food", "freelancer"], default="tech", help="Business type for geo-targeting")
+    parser.add_argument("--typo", "--type", choices=["tech", "food", "freelancer", "dentist"], default="tech", help="Business type for geo-targeting")
     args = parser.parse_args()
     return args
 
@@ -59,6 +59,7 @@ def run_pipeline(state: dict) -> dict:
         from nodes.orchestrator_node import process as orchestrator_process
         from nodes.content_fetcher_node import process as content_fetcher_process
         from nodes.prospector_node import process as prospector_process
+        from nodes.content_strategist_node import process as content_strategist_process
         from nodes.researcher_node import process as researcher_process
         from nodes.validator_node import process as validator_process
         from nodes.finalizer_node import process as finalizer_process
@@ -70,6 +71,7 @@ def run_pipeline(state: dict) -> dict:
         ("Orchestrator Node", orchestrator_process),
         ("Content Fetcher Node", content_fetcher_process),
         ("Prospector Node", prospector_process),
+        ("Content Strategist Node", content_strategist_process),
         ("Researcher Node", researcher_process),
         ("Validator Node", validator_process),
         ("Finalizer Node", finalizer_process),
@@ -81,12 +83,13 @@ def run_pipeline(state: dict) -> dict:
         console.print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting [bold green]{node_name}[/bold green]...")
         try:
             current_state = node_func(current_state)
+            console.print(f"[{datetime.now().strftime('%H:%M:%S')}] Completed [bold green]{node_name}[/bold green].")
         except Exception as e:
             console.print(f"[bold red]CRITICAL NODE FAILURE ({node_name}): {e}[/bold red]")
+            current_state["status"] = "degraded"
             # Downstream nodes must gracefully handle missing data.
             # Continue the pipeline.
             pass
-        console.print(f"[{datetime.now().strftime('%H:%M:%S')}] Completed [bold green]{node_name}[/bold green].")
 
     return current_state
 

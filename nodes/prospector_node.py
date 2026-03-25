@@ -50,7 +50,7 @@ def call_perplexity(system_prompt: str, user_prompt: str, api_key: str) -> str:
         return ""
 
 def process(state: dict) -> dict:
-    console.print("[cyan]Prospector Node[/cyan]: Starting multi-call GEO search...")
+    console.print("[cyan]Prospector Node[/cyan]: Starting single-call Agency-Grade GEO search...")
 
     # Fallbacks and default schema strictly defined
     raw_data_complete = {
@@ -66,11 +66,13 @@ def process(state: dict) -> dict:
     
     external_sources = []
     prospector_notes = "Default fallbacks used."
+    external_data_quality = "HIGH"
     
     url = state.get("url", "Unknown")
     locale = state.get("locale", "en")
     target_industry = state.get("target_industry", "general content")
     scale_level = state.get("scale_level", "National")
+    type_config = state.get("type_config", {})
     
     serper_api_key = os.getenv("SERPER_API_KEY")
     perplexity_api_key = os.getenv("PERPLEXITY_API_KEY")
@@ -80,107 +82,117 @@ def process(state: dict) -> dict:
         state["raw_data_complete"] = raw_data_complete
         state["external_sources"] = external_sources
         state["prospector_notes"] = "Failed: Missing API keys"
+        state["external_data_quality"] = "LOW"
         return state
 
-    # --- Helper: Parse and Structure Data via JSON extraction ---
-    def extract_json_array(text: str, key: str) -> list:
-        try:
-            match = re.search(r'```(?:json)?(.*?)```', text, re.DOTALL | re.IGNORECASE)
-            json_str = match.group(1).strip() if match else text.strip()
-            data = json.loads(json_str)
-            return data.get(key, [])
-        except Exception as e:
-            console.print(f"[red]JSON Parse Failed for key '{key}'[/red]: {e}")
-            return []
+    # Perform Serper Call (Grounding Research)
+    console.print("Fetching SERPER results for grounding...")
+    location_enforce = type_config.get("location_enforce", False)
+    discovered_location = state.get("discovered_location", "")
+    
+    # Do not force local market query for global/national brands
+    is_local = (scale_level == "Local") and location_enforce and discovered_location and discovered_location.lower() not in ["worldwide", "national"]
 
-    # Perform Serper Call
-    console.print("Fetching SERPER results...")
-    serper_query = f"{target_industry} best websites" if locale == "en" else f"migliori siti web per {target_industry}"
+    if locale == "it":
+        if is_local:
+            serper_query = f"eccellenze per {target_industry} a {discovered_location}"
+        else:
+            serper_query = f"eccellenze e leader per {target_industry}"
+    else:
+        if is_local:
+            serper_query = f"top {target_industry} businesses in {discovered_location}"
+        else:
+            serper_query = f"top {target_industry} industry leaders"
+            
+    def is_valid_result(res):
+        link = res.get("link", "").lower()
+        title = res.get("title", "").lower()
+        invalid_domains = ['amazon', 'tripadvisor', 'yelp', 'trustpilot', 'booking', 'expedia', 'zillow', 'yellowpages', 'facebook', 'instagram', 'linkedin', 'thefork', 'justeat', 'deliveroo', 'glovo']
+        if any(d in link for d in invalid_domains): return False
+        if "directory" in title or "top 10" in title or "best 10" in title or "migliori 10" in title: return False
+        return True
+
     for attempt in range(2):
         s_results = call_serper(serper_query, str(serper_api_key))
         if s_results:
-            raw_data_complete["serper_results"] = s_results
-            external_sources = [r.get("link") for r in s_results if "link" in r]
+            seen_domains = set()
+            filtered_results = []
+            for r in s_results:
+                if is_valid_result(r):
+                    domain_match = re.search(r'https?://(?:www\.)?([^/]+)', r.get("link", ""))
+                    d = domain_match.group(1).lower() if domain_match else r.get("link", "")
+                    if d not in seen_domains:
+                        seen_domains.add(d)
+                        filtered_results.append(r)
+            raw_data_complete["serper_results"] = filtered_results
+            external_sources = [r.get("link") for r in filtered_results if r.get("link")]
+            
+            if len(filtered_results) < 4:
+                external_data_quality = "LOW"
             break
         else:
             console.print("[yellow]Serper retry...[/yellow]")
+            if attempt == 1:
+                external_data_quality = "LOW"
 
-    # Prepare Perplexity Prompts
-    system_role = "You are a strict Data Miner API. You only extract hard empirical data from SERP results. No SEO/GEO analysis. Strict JSON only."
+    # Single-Stage Tier-1 GEO Intelligence Call
+    system_role = "You are a Tier-1 GEO Intelligence Analyst. You return ONLY strict JSON. No conversational filler."
     lang_instruction = "Respond entirely in Italian while preserving proper nouns and brand names." if locale == "it" else "Respond in English."
+    
+    # Agency Prompt Construction
+    location_clause = ""
+    if location_enforce and discovered_location:
+        location_clause = f"CRITICAL: Context is strictly limited to the location '{discovered_location}'. Extract only nearby results."
 
-    adaptive_scope = f"The business scale is '{scale_level}'. If Local, extract only nearby competitors. If Global/National, focus on major market leaders."
-
-    # Multi-Stage Waterfall Search
     anti_noise = "FATAL RULE: Strictly exclude all review sites, leaderboards, blog/news media, and aggregators (Amazon, Tripadvisor, Yelp, Trustpilot). Extract ONLY proprietary business entities."
-    
-    # Call 1: Brand Axis (Direct Competitors)
-    user_query_1 = f"Identify the top 5 proprietary brand names (companies) competing directly with {url} in the {target_industry} market. {anti_noise} {lang_instruction} Respond with JSON: {{ \"competitors\": [\"Name 1\", \"Name 2\"] }}"
-    
-    # Call 2: Authority Axis (Technical Nodes)
-    user_query_2 = f"Identify 5 industry-defining technical standards, certifications, and specialized service protocols that define authority for {target_industry} leaders. {lang_instruction} Respond with JSON: {{ \"industry_entities\": [\"Standard 1\", \"Cert 2\"] }}"
 
-    # Call 3: Gap & Intent Axis
-    user_query_3 = f"Analyze deep content gaps and user FAQs for {target_industry} compared to market leaders. {lang_instruction} Respond with JSON: {{ \"topic_gaps\": [\"Gap 1\"], \"faq_patterns\": [\"FAQ 1\"] }}"
+    agency_query = f"""
+    You are a Tier-1 GEO Intelligence Analyst. 
+    Target: {url} | Industry: {target_industry} | Scale: {scale_level} | Business Type: {state.get('business_type')}
+    {location_clause}
+    {anti_noise}
+    {lang_instruction}
 
-    console.print("Waterfall Phase 1: Brand Axis...")
-    res_1 = call_perplexity(system_role, user_query_1, str(perplexity_api_key))
-    
-    console.print("Waterfall Phase 2: Authority Axis...")
-    res_2 = call_perplexity(system_role, user_query_2, str(perplexity_api_key))
-    
-    console.print("Waterfall Phase 3: Gap & Intent Axis...")
-    res_3 = call_perplexity(system_role, user_query_3, str(perplexity_api_key))
+    Analyze the market and return STRICT JSON with exactly these keys:
+    "competitor_entities": list of top 8 proprietary brand names (companies) competing directly.
+    "authority_entities": list of 12 industry-defining technical standards, certifications, or specialized protocols.
+    "topic_gaps": list of 10 specific technical or content gaps vs leaders.
+    "faq_patterns": list of 5 most common user intent patterns.
+    """
 
-    # Parse raw results
-    raw_brands = extract_json_array(res_1, "competitors")
-    raw_authority = extract_json_array(res_2, "industry_entities")
-    gaps = extract_json_array(res_3, "topic_gaps")
-    faqs = extract_json_array(res_3, "faq_patterns")
-
-    # PHASE 4: Taxonomy Classification (The Knowledge Filter)
-    all_raw_entities = list(set(raw_brands + raw_authority))
-    console.print(f"Waterfall Phase 4: Classifying {len(all_raw_entities)} entities for noise reduction...")
+    console.print(f"Executing Tier-1 Intelligence Retrieval for {scale_level} scope...")
+    raw_intelligence = call_perplexity(system_role, agency_query, str(perplexity_api_key))
     
-    classification_query = f"Classify this list of entities related to {target_industry} into a strict taxonomy: PROPRIETARY_BRAND, TECHNICAL_STANDARD, or NOISE (aggregators, review sites, news). Entities: {all_raw_entities}. respond ONLY with JSON: {{ \"classified\": [{{ \"name\": \"...\", \"type\": \"...\" }}] }}"
-    res_class = call_perplexity(system_role, classification_query, str(perplexity_api_key))
-    
-    classified_data = extract_json_array(res_class, "classified")
-    
-    # Filter: Keep only high-value types and separate them
-    clean_brands = []
-    clean_authority = []
-    for item in classified_data:
-        if isinstance(item, dict):
-            e_type = item.get("type", "").upper()
-            if e_type == "PROPRIETARY_BRAND":
-                clean_brands.append(item.get("name"))
-            elif e_type in ["TECHNICAL_STANDARD", "AUTHORITY_NODE"]:
-                clean_authority.append(item.get("name"))
-
-    raw_data_complete["competitor_entities"] = clean_brands if clean_brands else ["No brands passed classification"]
-    raw_data_complete["authority_entities"] = clean_authority if clean_authority else ["No authority standards passed classification"]
-    raw_data_complete["topic_gaps"] = gaps
-    raw_data_complete["faq_patterns"] = faqs
-    
-    summary_text = ""
-    if res_1 and res_2 and res_3:
-        summary_text = f"Waterfall Discovery Complete. Phases 1-4 executed."
-    else:
-        summary_text = f"Partial Waterfall Discovery. Errors in phases."
+    # Extract JSON
+    try:
+        if "INSUFFICIENT" in raw_intelligence or "insufficient" in raw_intelligence.lower():
+            external_data_quality = "LOW"
+            
+        match = re.search(r'```(?:json)?(.*?)```', raw_intelligence, re.DOTALL | re.IGNORECASE)
+        json_str = match.group(1).strip() if match else raw_intelligence.strip()
+        intel_data = json.loads(json_str)
         
-    raw_data_complete["perplexity_summary"] = summary_text
+        raw_data_complete["competitor_entities"] = [str(e).strip() for e in intel_data.get("competitor_entities", [])]
+        raw_data_complete["authority_entities"] = [str(e).strip() for e in intel_data.get("authority_entities", [])]
+        raw_data_complete["topic_gaps"] = intel_data.get("topic_gaps", [])
+        raw_data_complete["faq_patterns"] = intel_data.get("faq_patterns", [])
+        raw_data_complete["perplexity_summary"] = f"Intelligence Mapping Success: {len(raw_data_complete['competitor_entities'])} competitors."
+        
+        if len(raw_data_complete['competitor_entities']) < 2:
+            external_data_quality = "LOW"
+            
+        console.print(f"[green]Prospector Node[/green]: Successfully mapped {len(raw_data_complete['competitor_entities'])} competitors and {len(raw_data_complete['authority_entities'])} authority nodes.")
+    except Exception as e:
+        console.print(f"[bold red]Agency Intelligence Parsing Failed[/bold red]: {e}")
+        raw_data_complete["perplexity_summary"] = "Intelligence Retrieval Failed."
+        external_data_quality = "LOW"
+
     raw_data_complete["source_urls"] = external_sources
-    raw_data_complete["raw_notes"] = [res_1, res_2, res_3, res_class]
+    raw_data_complete["raw_notes"] = [raw_intelligence]
     
-    prospector_notes = "Successfully ran Waterfall GEO context retrieval & classification."
-    if not res_1 and not res_2 and not s_results:
-        console.print("[bold red]NODE_FAILED[/bold red]: Prospector retrieved no external data.")
-        prospector_notes = "Failed to retrieve any data."
-    
-    # Assign safely
     state["raw_data_complete"] = raw_data_complete
     state["external_sources"] = external_sources
-    state["prospector_notes"] = prospector_notes
+    state["prospector_notes"] = f"Successfully executed Tier-1 {scale_level} Intelligence Retrieval."
+    state["external_data_quality"] = external_data_quality
     
     return state
