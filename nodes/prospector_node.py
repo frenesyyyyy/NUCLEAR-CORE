@@ -4,30 +4,29 @@ import re
 import json
 import requests
 from rich.console import Console
+from google import genai
+from nodes.api_utils import execute_with_backoff
 
 console = Console()
 
 def call_serper(query: str, api_key: str) -> list:
-    console.print("[yellow]Waiting 5 seconds to respect Serper API rate limits...[/yellow]")
-    time.sleep(5)
     url = "https://google.serper.dev/search"
     payload = json.dumps({"q": query, "num": 10})
     headers = {
         'X-API-KEY': api_key,
         'Content-Type': 'application/json'
     }
-    try:
+    def _req():
         response = requests.post(url, headers=headers, data=payload, timeout=15)
         response.raise_for_status()
-        data = response.json()
-        return data.get("organic", [])
+        return response.json().get("organic", [])
+    try:
+        return execute_with_backoff(_req, max_retries=3, initial_delay=2.0)
     except Exception as e:
         console.print(f"[yellow]Serper API Error[/yellow]: {e}")
         return []
 
 def call_perplexity(system_prompt: str, user_prompt: str, api_key: str) -> str:
-    console.print("[yellow]Waiting 5 seconds to respect Perplexity API rate limits...[/yellow]")
-    time.sleep(5)
     url = "https://api.perplexity.ai/chat/completions"
     payload = {
         "model": "sonar-pro",
@@ -40,11 +39,12 @@ def call_perplexity(system_prompt: str, user_prompt: str, api_key: str) -> str:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
-    try:
+    def _req():
         response = requests.post(url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
+        return response.json()["choices"][0]["message"]["content"]
+    try:
+        return execute_with_backoff(_req, max_retries=3, initial_delay=3.0)
     except Exception as e:
         console.print(f"[yellow]Perplexity API Error[/yellow]: {e}")
         return ""
@@ -84,6 +84,80 @@ def process(state: dict) -> dict:
         state["prospector_notes"] = "Failed: Missing API keys"
         state["external_data_quality"] = "LOW"
         return state
+
+    # --- CLASSIFICATION VALIDATION LAYER (PHASE 2) ---
+    # Moved here so Prospector searches for the TRUE industry, preventing Market Poisoning.
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if gemini_key:
+        console.print("[cyan]Prospector Node[/cyan]: Validating orchestrator's blind classification against deep content before searching...")
+        try:
+            client = genai.Client(api_key=gemini_key)
+            initial_brand = state.get("brand_name", "Unknown")
+            initial_ind = state.get("target_industry", "Unknown")
+            initial_loc = state.get("discovered_location", "Unknown")
+            
+            client_content = state.get("client_content_clean", "")
+            og_title = state.get("og_tags", {}).get("og:title", "")
+            schema_counts = state.get("schema_type_counts", {})
+            schema_str = ", ".join(schema_counts.keys()) if schema_counts else "None"
+            
+            val_prompt = f"""
+            You are an AI data classification expert validating the initial blind categorization of a website.
+            Initial Classification (guessed from URL only):
+            - Brand: {initial_brand}
+            - Industry: {initial_ind}
+            - Location: {initial_loc}
+
+            Deep Evidence (Scraped HTML & Schema):
+            - Schema Types: {schema_str}
+            - OG Title: {og_title}
+            - Content Snippet: {client_content[:5000]}
+            
+            Evaluate if the initial classification is accurate. Generic assumptions like "Tech" often mask a specific niche (e.g., "Restaurant Delivery Software"). Give the TRUE, HIGHLY SPECIFIC industry and the exact proper brand name used on the site.
+            
+            CRITICAL RULES FOR CLASSIFICATION:
+            1. Scrutinize the H1/H2 headings in the Content Snippet. They often contain the exact value proposition.
+            2. If 'Organization' or 'LocalBusiness' Schema is present, trust its industry definition immediately.
+            3. Ignore generic marketing boilerplate (e.g. "We deliver excellence"); focus on the literal product/service described.
+            4. Only set Location to a city/region if the business relies on foot traffic or local territory constraints. If it is global SaaS, return 'Worldwide'.
+            
+            Return STRICTLY JSON with exact keys:
+            "validated_brand_name": string (The exact, correct brand name)
+            "validated_industry": string (The highly specific industry/niche)
+            "validated_target_audience_summary": string (A concise summary of the primary target audience matching the validated industry)
+            "validated_persona_matrix": dict (A structured breakdown of 1-3 buyer personas matching the validated industry)
+            "validated_location": string (The operating location, or 'Worldwide' if global)
+            "classification_notes": string (Why you changed it, or 'Confirmed initial classification.')
+            """
+            def _val_req():
+                return client.models.generate_content(
+                    model='gemini-2.5-flash-lite',
+                    contents=val_prompt,
+                    config={"response_mime_type": "application/json"}
+                )
+            val_res = execute_with_backoff(_val_req, max_retries=2, initial_delay=2.0)
+            clean_val = val_res.text.strip()
+            if clean_val.startswith("```json"): clean_val = clean_val[7:]
+            if clean_val.startswith("```"): clean_val = clean_val[3:]
+            if clean_val.endswith("```"): clean_val = clean_val[:-3]
+            
+            val_data = json.loads(clean_val.strip())
+            
+            # Immediately overwrite the generic state variables
+            target_industry = val_data.get("validated_industry", initial_ind)
+            state["brand_name"] = val_data.get("validated_brand_name", initial_brand)
+            state["target_industry"] = target_industry
+            state["discovered_location"] = val_data.get("validated_location", initial_loc)
+            if val_data.get("validated_target_audience_summary"):
+                state["target_audience_summary"] = val_data.get("validated_target_audience_summary")
+            if val_data.get("validated_persona_matrix"):
+                state["persona_matrix"] = val_data.get("validated_persona_matrix")
+            state["classification_notes"] = val_data.get("classification_notes", "")
+            
+            console.print(f"  [green]Validated Brand[/green]: {state['brand_name']} | [green]Validated Niche[/green]: {target_industry}")
+        except Exception as e:
+            console.print(f"[yellow]Classification validation failed, continuing with initial guesses: {e}[/yellow]")
+    # ------------------------------------------------
 
     # Perform Serper Call (Grounding Research)
     console.print("Fetching SERPER results for grounding...")
@@ -152,20 +226,20 @@ def process(state: dict) -> dict:
     if location_enforce and discovered_location:
         location_clause = f"CRITICAL: Context is strictly limited to the location '{discovered_location}'. Extract only nearby results."
 
-    anti_noise = "FATAL RULE: Strictly exclude all review sites, leaderboards, blog/news media, and aggregators (Amazon, Tripadvisor, Yelp, Trustpilot). Extract ONLY proprietary business entities."
+    anti_noise = "FATAL RULE: Strictly exclude all review sites, software directories (like Capterra, G2), leaderboards, blog/news media, and aggregators (Amazon, Tripadvisor, Yelp, Trustpilot). Extract ONLY proprietary business entities."
 
     agency_query = f"""
     You are a Tier-1 GEO Intelligence Analyst. 
-    Target: {url} | Industry: {target_industry} | Scale: {scale_level} | Business Type: {state.get('business_type')}
+    Target: {url} | Highly Specific Industry/Niche: {target_industry} | Scale: {scale_level} | Business Type: {state.get('business_type')}
     {location_clause}
     {anti_noise}
     {lang_instruction}
 
-    Analyze the market and return STRICT JSON with exactly these keys:
-    "competitor_entities": list of top 8 proprietary brand names (companies) competing directly.
-    "authority_entities": list of 12 industry-defining technical standards, certifications, or specialized protocols.
-    "topic_gaps": list of 10 specific technical or content gaps vs leaders.
-    "faq_patterns": list of 5 most common user intent patterns.
+    Analyze the precise niche market and return STRICT JSON with exactly these keys:
+    "competitor_entities": list of top 8 proprietary brand names (companies) competing directly IN THIS EXACT NICHE. Do NOT return generic massive companies unless they perfectly match this specific niche.
+    "authority_entities": list of 12 industry-defining technical standards, certifications, or specialized protocols for this niche.
+    "topic_gaps": list of 10 highly specific technical or content gaps vs niche leaders.
+    "faq_patterns": list of 5 most common user intent patterns for this niche.
     """
 
     console.print(f"Executing Tier-1 Intelligence Retrieval for {scale_level} scope...")

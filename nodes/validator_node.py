@@ -29,16 +29,16 @@ def process(state: dict) -> dict:
         
         if confidence < 50 or citation_status == "Low Verification":
             roi_verified = False
-            validator_notes = "Low confidence due to insufficient structured evidence"
+            validator_notes = "Intelligence Blocked: Site architecture (JS/Robots/Thin Content) prevents AI engines from extracting value. Unblocking this is Priority 1."
         elif info_gain > 10 and citation_status in ["Verified", "Partially Verified"]:
             roi_verified = True
-            validator_notes = "Strong incremental opportunity identified. Content gap validation provides heuristically plausible ROI."
+            validator_notes = "High-Yield Opportunity: The market is asking questions this brand does not answer. Expanding Top-of-Funnel FAQ authority will capture AI intent."
         elif info_gain <= 10 and consensus > 80:
             roi_verified = False
-            validator_notes = "Market is heavily saturated with client entities. Limited low-hanging fruit. ROI viability lower."
+            validator_notes = "Visibility Plateau: Market is heavily saturated with client entities. Limited conversational upside. Focus on technical entity consensus."
         else:
             roi_verified = False
-            validator_notes = "Opportunity not clear enough from current evidence to verify ROI."
+            validator_notes = "Visibility Risk: Brand is absent from organic discovery and technical authority signals. Foundational E-E-A-T reset required."
             
     console.print(f"[green]Validator Node[/green]: Validation: {validation} | ROI Verified: {roi_verified}")
     

@@ -1,10 +1,70 @@
 import os
+import re
 import json
 import time
 from rich.console import Console
 from google import genai
 
 console = Console()
+
+
+def _build_grounding_context(state: dict) -> str:
+    """
+    Stage 1: Assemble a structured grounding block from all available state evidence.
+    Injected into LLM prompts to anchor generation to real, collected data.
+    Returns a Markdown-formatted string ready for prompt injection.
+    """
+    raw_data = state.get("raw_data_complete", {})
+    depth = state.get("client_content_depth", {})
+    locale = state.get("locale", "en")
+    content = state.get("client_content_clean", "").lower()
+
+    competitors = raw_data.get("competitor_entities", [])[:6]
+    authority = raw_data.get("authority_entities", [])[:8]
+    topic_gaps = raw_data.get("topic_gaps", [])[:8]
+    faq_patterns = raw_data.get("faq_patterns", [])[:5]
+    schema_counts = state.get("schema_type_counts", {})
+    og_title = state.get("og_tags", {}).get("og:title", "")
+    robots = state.get("robots_txt_status", "not_found")
+    extraction_quality = depth.get("extraction_quality", "unknown") if isinstance(depth, dict) else "unknown"
+    page_count = depth.get("page_count", 1) if isinstance(depth, dict) else 1
+    js_fallback = state.get("js_fallback_used", False)
+
+    lines = [
+        "## Brand Context",
+        f"- Brand: {state.get('brand_name', 'Unknown')} | Industry: {state.get('target_industry', 'Unknown')}",
+        f"- Scale: {state.get('scale_level', 'Unknown')} | Location: {state.get('discovered_location', 'Unknown')}",
+        f"- OG Title: {og_title or 'not set'} | robots.txt: {robots}",
+        f"- Schema types present: {', '.join(schema_counts.keys()) if schema_counts else 'none detected'}",
+        "",
+        "## Competitor Landscape",
+        f"- Direct competitors: {', '.join(competitors) if competitors else 'none identified'}",
+        f"- Authority standards/entities: {', '.join(authority) if authority else 'none identified'}",
+        "",
+        "## Content Gaps & Market Intelligence",
+        f"- Confirmed topic gaps: {'; '.join(topic_gaps) if topic_gaps else 'none identified'}",
+        f"- User FAQ patterns in market: {'; '.join(faq_patterns) if faq_patterns else 'none identified'}",
+        "",
+        "## Evidence Quality",
+        f"- Extraction quality: {extraction_quality} | Pages crawled: {page_count}",
+        f"- JS rendering fallback used: {js_fallback}",
+    ]
+
+    # Stage 3: Italian trust signals
+    if locale == "it":
+        piva = bool(re.search(r'p\.?\s*i\.?\s*v\.?\s*a\.?\s*[:=]?\s*\d{11}', content))
+        pec = bool(re.search(r'@pec\.|posta\s+certificata', content))
+        rea = bool(re.search(r'\brea\b\s*[:=]?\s*[a-z]{2}\s*\d+', content))
+        cam = 'camera di commercio' in content
+        lines += [
+            "",
+            "## Italian Trust Signals",
+            f"- P.IVA detected: {piva} | PEC email: {pec} | REA: {rea} | Camera di Commercio: {cam}",
+            f"- Location: {state.get('discovered_location', 'unknown')}",
+            "- Note: missing Italian legal anchors (P.IVA, PEC, PostalAddress schema) are critical GEO gaps for Italian AI engines.",
+        ]
+
+    return "\n".join(lines)
 
 def process(state: dict) -> dict:
     console.print("[cyan]Content Strategist Node[/cyan]: Extracting structured data and E-E-A-T anchors...")
@@ -60,30 +120,41 @@ def process(state: dict) -> dict:
         return state
 
     client = genai.Client(api_key=gemini_key)
-    
-    # 5-second sleep for rate limits
-    time.sleep(5)
-    
+    from nodes.api_utils import execute_with_backoff
+
+    # Stage 1: assemble grounding context from all collected evidence
+    grounding_context = _build_grounding_context(state)
+
     prompt = f"""
-    You are a Senior GEO Content Auditor. 
-    Analyze the following raw website content and the provided evidence summary to identify proprietary intellectual property and E-E-A-T signals.
-    
+    You are a Senior GEO Content Auditor conducting an agency-grade audit.
+
+    ## Collected Market Intelligence
+    {grounding_context}
+
+    ## Target Website
     URL: {url}
     Evidence Summary: {evidence_summary}
-    Content Snippet: {client_content[:15000]}
-    
+
+    ## Website Content (first 12000 chars)
+    {client_content[:12000]}
+
+    Using the market intelligence above as ground truth — not your training data —
+    identify what is missing, weak, or undifferentiated versus the competitor landscape.
+
     Return STRICT JSON with exactly these keys:
-    "original_frameworks": list of proprietary methodologies or unique service names detected
-    "e_e_a_t_gaps": list of missing authority anchors (e.g., "Missing author credentials", "No trust badges")
-    "recommended_content": list of 3-5 specific new pages or sections to improve GEO standing
+    "original_frameworks": list of proprietary methodologies or unique service names actually present on this site
+    "e_e_a_t_gaps": list of specific missing authority anchors grounded in the competitor/market data above
+    "recommended_content": list of 3-5 specific new pages or sections, each referencing a real gap from the market intelligence
     """
     
     try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash-lite',
-            contents=prompt,
-            config={"response_mime_type": "application/json"}
-        )
+        def _req():
+            return client.models.generate_content(
+                model='gemini-2.5-flash-lite',
+                contents=prompt,
+                config={"response_mime_type": "application/json"}
+            )
+        response = execute_with_backoff(_req, max_retries=2, initial_delay=2.0)
         clean_text = response.text.strip()
         if clean_text.startswith("```json"):
             clean_text = clean_text[7:]
@@ -111,5 +182,6 @@ def process(state: dict) -> dict:
     state["structured_data_extract"] = structured_data_extract
     state["evidence_summary"] = evidence_summary
     state["extraction_warnings"] = extraction_warnings
+    state["grounding_context"] = _build_grounding_context(state)  # available to downstream nodes
     
     return state

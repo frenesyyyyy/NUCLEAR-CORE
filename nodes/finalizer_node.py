@@ -103,46 +103,53 @@ def process(state: dict) -> dict:
         
         # Determine labels based on locale
         if locale == "it":
-            title = "Report Ufficiale Audit GEO v4.4 (Agency-Grade)"
+            title = "Report di Generative Visibility Intelligence"
             url_label = "URL Destinazione"
             ind_label = "Settore"
             aud_label = "Pubblico Principale"
-            met_label = "Intelligence Matrix (70/20/10)"
-            ent_label = "Entity Consensus"
+            met_label = "Intelligence Matrix"
+            ent_label = "Visibility Index (Entity Consensus)"
             info_label = "Information Gain (Mancanze/Upside)"
             risk_label = "Hallucination Risk (Rischio Errori AI)"
-            conf_label = "Affidabilità Dati d'Estrazione (Confidence Score)"
-            ev_label = "Sintesi Copertura Evidenze (Evidence Coverage)"
+            conf_label = "Data Confidence Score"
+            ev_label = "Sintesi Copertura Evidenze"
             cit_label = "Stato Citazioni"
             read_label = "Livello Readiness"
-            roi_label = "Proiezioni Limitate & Validazione ROI"
-            rec_label = "GEO Strategy: Recommendation Pack Dettagliato"
-            strat_label = "Evidenze Strutturate & Content Strategy"
-            lim_label = "Limitazioni nell'Analisi & Dati Mancanti"
+            roi_label = "Proiezioni & Validazione ROI"
+            rec_label = "Agency Recommendation Pack"
+            strat_label = "Evidenze Strutturate"
+            lim_label = "Limitazioni nell'Analisi"
             based_on_ev = "Basato sulle evidenze disponibili..."
             lim_data = "I dati limitati indicano..."
         else:
-            title = "Official GEO Audit Report v4.4 (Agency-Grade)"
+            title = "Generative Visibility Intelligence Report"
             url_label = "Target URL"
             ind_label = "Industry"
             aud_label = "Target Audience"
             met_label = "Agency Intelligence Matrix"
-            ent_label = "Entity Consensus"
+            ent_label = "Visibility Index (Entity Consensus)"
             info_label = "Information Gain (Content Upside)"
             risk_label = "Hallucination Risk"
             conf_label = "Data Confidence Score"
-            ev_label = "Evidence Coverage Summary"
+            ev_label = "Evidence Coverage"
             cit_label = "Citation Status"
             read_label = "Readiness Level"
-            roi_label = "Bounded Lift Projection & ROI"
+            roi_label = "Lift Projection & ROI"
             rec_label = "Agency Recommendation Pack"
-            strat_label = "Structured Evidence & Content Strategist"
+            strat_label = "Structured Evidence"
             lim_label = "Limitations & Missing Data"
             based_on_ev = "Based on available evidence..."
             lim_data = "Limited data suggests..."
             
         metrics = state.get("metrics", {})
         confidence = state.get("confidence_score", 0)
+        extraction_integrity = state.get("extraction_integrity", confidence)
+        context_reliability  = state.get("context_reliability", confidence)
+        
+        class_notes = state.get("classification_notes", "")
+        classification_notice = ""
+        if class_notes and "confirmed" not in class_notes.lower():
+            classification_notice = f"\n> **⚠️ Internal Context Correction:** L'AI iniziale ha mal interpretato il mercato a causa di segnali ambigui; il contesto è stato corretto d'ufficio tramite l'analisi semantica profonda.\n> *Note: {class_notes}*\n"
         
         limitations = ""
         if confidence < 60:
@@ -171,34 +178,77 @@ def process(state: dict) -> dict:
         except:
             rec_md = str(state.get("geo_recommendation_pack", "N/A"))
             
+        # Stress Test Rendering
+        stress_tests = state.get("stress_test_log", [])
+        stress_md = ""
+        if stress_tests:
+            stress_md = "## 🔍 AI Search Stress Test\n*Real-time queries executed against Perplexity to test brand presence.*\n\n| Tier | Search Query | Result |\n|---|---|---|\n"
+            for test in stress_tests:
+                t_tier = {
+                    "blind_discovery": "Blind Discovery",
+                    "contextual_discovery": "Contextual",
+                    "branded_validation": "Branded Validation"
+                }.get(test.get("tier", "Unknown"), test.get("tier", "Unknown"))
+                t_query = test.get("query", "")
+                t_res = "✅ Matched" if test.get("matched") else "❌ Missed"
+                stress_md += f"| {t_tier} | *{t_query}* | {t_res} |\n"
+            stress_md += "\n---\n\n"
+
+        # Italian Trust Signals Rendering
+        italian_trust_md = ""
+        if locale == "it":
+            it_sig = state.get("italian_trust_signals", {})
+            if it_sig:
+                italian_trust_md = "## 🇮🇹 Italian Market Trust Signals\n*AI engines look for these specific anchors to verify Italian entities.*\n"
+                italian_trust_md += f"- **Partita IVA:** {'✅ Detected' if it_sig.get('piva_detected') else '❌ Missing'}\n"
+                italian_trust_md += f"- **PEC (Posta Certificata):** {'✅ Detected' if it_sig.get('pec_detected') else '❌ Missing'}\n"
+                italian_trust_md += f"- **Camera di Commercio / REA:** {'✅ Detected' if it_sig.get('rea_detected') or it_sig.get('camera_commercio_detected') else '❌ Missing'}\n\n---\n\n"
+
         md_content = f"""# ☢️ NUCLEAR AI: {title}
 
 **{url_label}:** {state.get("url", "N/A")}  
 **Brand:** {state.get("brand_name", "N/A")} ({state.get("scale_level", "National")})  
 **{ind_label}:** {state.get("target_industry", "N/A")}  
-**{read_label}:** {metrics.get("Citation Readiness", "N/A")}  
 
 ---
 
-## 🛡️ {conf_label}: {confidence}/100
+## 🎯 Sintesi Esecutiva & Posizionamento (Executive Summary)
+*Questo Audit mostra quanto il brand è visibile, raccomandato e considerato autorevole dai modelli di intelligenza artificiale (AIO e RAG).*
+
+- **{ent_label}: {metrics.get("Entity Consensus", 0)}/100** 
+  *(Misura quanto le entità del brand sono allineate con gli standard tecnici e i competitor di settore)*
+- **{risk_label}: {metrics.get("Hallucination Risk", 100)}%** 
+  *(Il grado di rischio che un'AI inventi, distorca o ometta informazioni proprietarie a causa di segnali deboli sul sito)*
+- **{info_label}: {metrics.get("Information Gain", 0)}/100** 
+  *(Il valore unico dei contenuti proprietari rispetto al rumore di mercato e ai topic gap)*
+- **{conf_label}: {confidence}/100** 
+  *(L'indice di integrità e completezza dei dati tecnici estratti dal sito durante questo audit)*
+- **Stato AI Readiness:** {metrics.get("Citation Readiness", "N/A")}
+
+---
+
+## 🛡️ {ev_label}
 {limitations}
-
-## 📊 {met_label}
-- **{ent_label}:** {metrics.get("Entity Consensus", 0)}% (Brand entity detection)
-- **{info_label}:** {metrics.get("Information Gain", 0)}% (Estimated missing topics)
-- **{risk_label}:** {metrics.get("Hallucination Risk", 100)}% (Risk of LLMs fabricating brand info)
-- **{cit_label}:** {state.get("citation_status", "N/A")}
-
----
-
-## 🧠 {strat_label} & {ev_label}
 - **Schema detected:** {schema_str}
 - **E-E-A-T Gaps:** {", ".join(state.get("e_e_a_t_gaps", [])) if state.get("e_e_a_t_gaps") else "None detected"}
 - **Original IP:** {", ".join(state.get("original_frameworks", [])) if state.get("original_frameworks") else "None detected"}
 
 ---
 
-## 🚀 {roi_label}
+## 🧮 Confidence Breakdown
+*The confidence score is now split into two independent dimensions.*
+
+| Dimension | Score | What it Measures |
+|---|---|---|
+| **Extraction Integrity** | {extraction_integrity}/100 | How faithfully the site content was captured (JS fallback, robots, word count, extraction warnings) |
+| **Context Reliability** | {context_reliability}/100 | How trustworthy the business frame is (schema completeness, OG quality, industry correction flag, market intelligence quality) |
+| **Blended Confidence** | **{confidence}/100** | Equally-weighted average of both dimensions |
+
+> *These scores are separate. A site can extract cleanly but still have a wrong or polluted business frame.*
+{classification_notice}
+---
+
+{italian_trust_md}{stress_md}## 🚀 {roi_label}
 - Conservative Lift Projection: {state.get("projected_traffic_lift", "N/A")}
 - ROI Verified: {"✅" if state.get("roi_verified") else "❌"}
 - Note: {state.get("validator_notes", "")}
@@ -212,7 +262,7 @@ def process(state: dict) -> dict:
 {chr(10).join([f"- {item}" for item in state.get("recommended_content", [])]) if state.get("recommended_content") else "N/A"}
 
 ---
-*Report generated by Nuclear AI GEO Optimizer v4.4 Agency-Grade on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
+*Report generated by Nuclear AI Generative Visibility Intelligence Platform on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
 """
         with open(md_file, "w", encoding="utf-8") as f:
             f.write(md_content)

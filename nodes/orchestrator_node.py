@@ -52,10 +52,7 @@ def process(state: dict) -> dict:
         return state
 
     client = genai.Client(api_key=gemini_key)
-    
-    # Strict 5-second sleep before API call as per specification
-    console.print("[yellow]Waiting 5 seconds to respect Gemini API rate limits...[/yellow]")
-    time.sleep(5)
+    from nodes.api_utils import execute_with_backoff
     
     prompt = f"""
     Analyze the following URL and determine the business profile for a v4.1 Agency-Grade GEO audit.
@@ -78,33 +75,30 @@ def process(state: dict) -> dict:
     "discovered_location": string (The main city, province or region. Return 'Worldwide' or 'National' if it operates broadly.)
     """
     
-    max_retries = 1
-    for attempt in range(max_retries + 1):
-        try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash-lite',
-                contents=prompt,
-                config=genai.types.GenerateContentConfig(
-                    response_mime_type="application/json"
-                )
+    def _req():
+        return client.models.generate_content(
+            model='gemini-2.5-flash-lite',
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(
+                response_mime_type="application/json"
             )
-            output = json.loads(response.text)
-            
-            target_industry = output.get("target_industry", "Unavailable")
-            brand_name = output.get("brand_name", "Unavailable")
-            target_audience_summary = output.get("target_audience_summary", "Unavailable")
-            persona_matrix = output.get("persona_matrix", {})
-            scale_level = output.get("scale_level", scale_level)
-            intent_type = output.get("intent_type", "Transactional")
-            discovered_location = output.get("discovered_location", "Worldwide")
-            
-            console.print(f"[green]Orchestrator Node[/green]: Successfully mapped {business_type} industry for {brand_name} ({discovered_location}).")
-            break
-        except Exception as e:
-            console.print(f"[yellow]Orchestrator Node[/yellow]: Attempt {attempt + 1} failed: {e}")
-            if attempt < max_retries:
-                console.print("[yellow]Waiting 5 seconds before retry...[/yellow]")
-                time.sleep(5)
+        )
+
+    try:
+        response = execute_with_backoff(_req, max_retries=2, initial_delay=2.0)
+        output = json.loads(response.text)
+        
+        target_industry = output.get("target_industry", "Unavailable")
+        brand_name = output.get("brand_name", "Unavailable")
+        target_audience_summary = output.get("target_audience_summary", "Unavailable")
+        persona_matrix = output.get("persona_matrix", {})
+        scale_level = output.get("scale_level", scale_level)
+        intent_type = output.get("intent_type", "Transactional")
+        discovered_location = output.get("discovered_location", "Worldwide")
+        
+        console.print(f"[green]Orchestrator Node[/green]: Successfully mapped {business_type} industry for {brand_name} ({discovered_location}).")
+    except Exception as e:
+        console.print(f"[bold red]NODE_FAILED[/bold red]: Orchestrator prompt failed: {e}")
     
     # v4.3 Global vs Local Fix (Critical Bug)
     is_global_heuristic = False
