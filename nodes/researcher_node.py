@@ -10,6 +10,7 @@ import requests
 import chromadb
 from sentence_transformers import SentenceTransformer
 from rich.console import Console
+from typing import Any
 from google import genai
 from nodes.api_utils import execute_with_backoff
 
@@ -17,90 +18,254 @@ console = Console()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Stress Test Helpers (3-Tier Evidence-Derived Architecture)
+# Stress Test Helpers (v4.5 Agency-Grade Tiered Architecture)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _build_blind_queries(faq_patterns: list, authority_entities: list, lang_name: str, budget: int = 8) -> list:
+def _safe_stringify_list(items: list[Any]) -> list[str]:
+    """
+    Agency-grade safety helper to normalize lists of mixed types (str, dict, list)
+    into a flat list of strings for prompt interpolation or joining.
+    """
+    if not items: return []
+    safe = []
+    for item in items:
+        if not item: continue
+        if isinstance(item, str):
+            val = item.strip()
+            if val: safe.append(val)
+        elif isinstance(item, dict):
+            # Convert dict to key:value string for context
+            val = "; ".join([f"{k}: {v}" for k, v in item.items() if v])
+            if val: safe.append(f"[{val}]")
+        else:
+            val = str(item).strip()
+            if val: safe.append(val)
+    return safe
+
+def _extract_brand_tokens(brand_name: str, url: str, og_title: str) -> set[str]:
+    """
+    Extracts restricted tokens that must NOT appear in T1/T2 queries.
+    """
+    from urllib.parse import urlparse
+    tokens = set()
+    
+    # 1. Full brand name
+    b = brand_name.lower().strip()
+    if b and b != "unknown":
+        tokens.add(b)
+        # Split tokens (e.g., "Just Eat" -> "just", "eat")
+        for part in b.split():
+            if len(part) > 2: tokens.add(part)
+
+    # 2. Domain token
+    try:
+        domain = urlparse(url).netloc.replace("www.", "").split(".")[0].lower()
+        if domain and len(domain) > 2:
+            tokens.add(domain)
+    except: pass
+
+    # 3. OG Title hints (significant words only)
+    if og_title and og_title != "N/A":
+        title_words = re.findall(r'\b\w{4,}\b', og_title.lower())
+        # Only add words that aren't common generic terms
+        stop_words = {"home", "welcome", "italia", "italy", "page", "website", "online", "servizi", "services"}
+        for word in title_words:
+            if word not in stop_words:
+                tokens.add(word)
+
+    return tokens
+
+def _query_has_brand_leakage(query: str, brand_tokens: set[str]) -> bool:
+    """Checks if a query contains any forbidden brand identifiers."""
+    q_low = query.lower()
+    for token in brand_tokens:
+        # Use word boundaries to avoid false positives (e.g. "eat" in "weather")
+        if re.search(rf'\b{re.escape(token)}\b', q_low):
+            return True
+    return False
+
+def _inject_geo_context(query: str, location: str, locale: str) -> str:
+    """Forces geo-anchoring into a query for local businesses."""
+    if not location or location.lower() in ["worldwide", "national", "unknown"]:
+        return query
+    
+    # Simplify location (e.g. "Rome, Italy" -> "Roma" if locale IT)
+    city = location.split(",")[0].strip()
+    if locale == "it" and city.lower() == "rome": city = "Roma"
+    if locale == "it" and city.lower() == "milan": city = "Milano"
+    
+    q = query.strip()
+    # Check if already has geo
+    if city.lower() in q.lower():
+        return q
+    
+    # Natural injection patterns
+    if locale == "it":
+        return f"{q} {city}"
+    else:
+        return f"{q} in {city}"
+
+def _is_realistic_query(query: str, industry: str) -> bool:
+    """Rejects taxonomical, corporate, or awkward AI-generated phrasing."""
+    q = query.lower()
+    # 1. Reject raw taxonomy tokens if they appear as the sole subject
+    bad_tokens = ["food delivery service", "delivery platform", "marketplace platform", "software as a service", "marketing agency"]
+    if q.strip() in bad_tokens: return False
+    
+    # 2. Reject awkward corporate labels that aren't natural Italian/English
+    if "service" in q and industry.lower() in q and len(q.split()) < 4: return False
+    
+    # 3. Reject placeholder-like brackets if they leaked
+    if "[" in q or "]" in q: return False
+    
+    return True
+
+def _sanitize_or_reject_query(
+    query: str, 
+    tier: str, 
+    brand_tokens: set[str], 
+    is_local: bool, 
+    location: str, 
+    locale: str,
+    industry: str = "business",
+    location_confidence: str = "high"
+) -> tuple[str | None, str]:
+    """
+    Agency Gate: Rejects or cleans queries based on tier-integrity and realism rules.
+    Returns (sanitized_query_or_None, reason).
+    """
+    if not query or len(query.strip()) < 5:
+        return None, "Too short"
+
+    q = query.strip()
+
+    # REALISM GATE: Reject taxonomical/awkward phrasing
+    if not _is_realistic_query(q, industry):
+        return None, "FAILED REALISM GATE: Taxonomical or awkward phrasing"
+
+    # Tier 1 & 2: Brand Leakage check
+    if tier in ["blind_discovery", "contextual_discovery"]:
+        if _query_has_brand_leakage(q, brand_tokens):
+            if tier == "blind_discovery":
+                return None, f"T1 HARD BAN: Brand leakage detected ({q})"
+            else:
+                # For T2, try one quick scrub if possible, otherwise reject
+                for token in brand_tokens:
+                    q = re.sub(rf'\b{re.escape(token)}\b', '', q, flags=re.IGNORECASE).strip()
+                if _query_has_brand_leakage(q, brand_tokens) or len(q) < 10:
+                    return None, "T2 Leakage: Scrub failed or corrupted context"
+
+    # Local Enforcement (CRITICAL PATCH)
+    # Only inject geo if is_local AND we have corroborated confidence (high/medium)
+    if is_local and location_confidence in ["high", "medium"]:
+        q = _inject_geo_context(q, location, locale)
+    elif is_local:
+        # Log suppression for debugging
+        # console.print(f"      [dim]Geo-injection suppressed (Conf: {location_confidence})[/dim]")
+        pass
+
+    return q, "Success"
+
+def _build_blind_queries(
+    faq_patterns: list, 
+    authority_entities: list, 
+    brand_tokens: set[str],
+    is_local: bool,
+    location: str,
+    locale: str,
+    gemini_client,
+    budget: int = 8
+) -> list:
     """
     Tier 1: Blind Discovery.
-    Uses FAQ patterns (no brand mentioned) as pure organic intent probes.
-    Also probes up to 3 authority entities as secondary blind signals.
-    Points value: 25 (highest — hardest signal to earn).
+    Uses LLM to convert patterns into brand-neutral category-intent queries.
     """
+    lang_name = "Italian" if locale == "it" else "English"
+    seeds = _safe_stringify_list(faq_patterns + authority_entities)[:10]
+    
     queries = []
-    for faq in faq_patterns[:budget]:
-        if faq and len(str(faq).strip()) > 8:
-            queries.append({
-                "query": str(faq).strip(),
-                "tier": "blind_discovery",
-                "points": 25
-            })
-
-    # Secondary blind probes: use authority/certification entities as search terms
-    # These never mention the brand; they test whether AI answers about the market mention it.
-    auth_budget = max(0, budget - len(queries))  # fill remaining budget
-    for ent in authority_entities[:min(3, auth_budget)]:
-        ent_q = str(ent).strip()
-        if ent_q and len(ent_q) > 5:
-            question = (
-                f"quale azienda è leader in {ent_q}" if lang_name == "Italian"
-                else f"which company leads in {ent_q}"
+    if seeds:
+        try:
+            prompt = f"""
+            Convert these market identifiers/FAQs into {budget} truly BLIND discovery queries.
+            RULES:
+            1. NO brand names, NO domain tokens, NO company specific IDs.
+            2. Focus on "best [category]", "how to [problem]", "[category] platform".
+            3. Must sound like a real user who DOES NOT know the brand exists.
+            4. Language: {lang_name}.
+            5. Output ONLY a JSON array of strings: ["query1", "query2", ...]
+            
+            Seeds: {json.dumps(seeds)}
+            """
+            res = gemini_client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=prompt,
+                config={"response_mime_type": "application/json"}
             )
-            queries.append({
-                "query": question,
-                "tier": "blind_discovery",
-                "points": 20  # slightly lower — less pure
-            })
-    return queries
+            raw_qs = json.loads(res.text)
+            if isinstance(raw_qs, dict): raw_qs = raw_qs.get("queries", [])
+            
+            for q in raw_qs:
+                sanitized, reason = _sanitize_or_reject_query(q, "blind_discovery", brand_tokens, is_local, location, locale, industry="market")
+                if sanitized:
+                    queries.append({"query": sanitized, "tier": "blind_discovery", "points": 25})
+        except Exception as e:
+            console.print(f"      [yellow]T1 Gen Error: {e}[/yellow]")
 
+    return queries
 
 def _build_contextual_queries(
     topic_gaps: list,
-    lang_name: str,
+    brand_tokens: set[str],
+    is_local: bool,
+    location: str,
+    locale: str,
     gemini_client,
     budget: int = 10,
+    persona_templates: list = None
 ) -> list:
     """
     Tier 2: Contextual Discovery.
-    Converts confirmed topic gaps into natural user questions using a single
-    Gemini call. Topics are fixed from validated evidence; only the phrasing is LLM.
-    Falls back to the raw gap string if the LLM call fails.
-    Points value: 15.
+    Strictly neutral queries derived from topic gaps.
     """
-    if not topic_gaps:
-        return []
+    lang_name = "Italian" if locale == "it" else "English"
+    if not topic_gaps: return []
 
-    gaps_to_use = [str(g).strip() for g in topic_gaps[:budget] if g and len(str(g).strip()) > 5]
-    if not gaps_to_use:
-        return []
-
+    gaps = [str(g).strip() for g in topic_gaps[:budget] if g]
+    
     try:
-        phrasing_prompt = (
-            f"Convert each of these content gap descriptions into a single natural search query "
-            f"that a real user would type. Language: {lang_name}. "
-            f"Output ONLY valid JSON: {{\"questions\": [\"...\", \"...\"]}}.\n"
-            f"Gaps: {json.dumps(gaps_to_use)}"
-        )
-        def _q_req():
-            return gemini_client.models.generate_content(
-                model="gemini-2.5-flash-lite",
-                contents=phrasing_prompt,
-                config={"response_mime_type": "application/json"}
-            )
-        res = execute_with_backoff(_q_req, max_retries=2, initial_delay=2.0)
-        questions = json.loads(res.text).get("questions", [])
-    except Exception:
-        questions = []  # fallback to raw gap strings below
+        persona_context = ""
+        if persona_templates:
+            pt_list = [f"{p.get('persona', '')} ({p.get('intent', '')})" for p in persona_templates if p.get('persona')]
+            persona_context = f"\nPersonas: {', '.join(pt_list)}."
 
-    queries = []
-    for i, gap in enumerate(gaps_to_use):
-        q_text = questions[i].strip() if i < len(questions) and questions[i].strip() else gap
-        queries.append({
-            "query": q_text,
-            "tier": "contextual_discovery",
-            "points": 15
-        })
-    return queries
+        prompt = f"""
+        Convert these content gaps into {len(gaps)} brand-neutral search queries.
+        RULES:
+        1. STRICTLY FORBIDDEN: Naming the audited brand or its website.
+        2. Allowed: Category, use case, budget, geography.
+        3. NO investor/analyst phrasing. Sound like a user search.
+        4. Language: {lang_name}.{persona_context}
+        5. Output ONLY JSON: {{"questions": ["...", "..."]}}
+        
+        Gaps: {json.dumps(gaps)}
+        """
+        res = gemini_client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=prompt,
+            config={"response_mime_type": "application/json"}
+        )
+        questions = json.loads(res.text).get("questions", [])
+        
+        queries = []
+        for q in questions:
+            sanitized, reason = _sanitize_or_reject_query(q, "contextual_discovery", brand_tokens, is_local, location, locale)
+            if sanitized:
+                queries.append({"query": sanitized, "tier": "contextual_discovery", "points": 15})
+        return queries
+    except Exception as e:
+        console.print(f"      [yellow]T2 Gen Error: {e}[/yellow]")
+        return []
 
 
 def _build_branded_queries(
@@ -213,12 +378,18 @@ def _run_stress_test(
     gemini_client=None
 ) -> tuple:
     """
-    Unified sequential Perplexity executor for all three tiers.
-    Returns (visibility_points, total_possible, stress_test_log).
+    Unified sequential Perplexity executor.
+    Returns (visibility_points, total_possible, stress_test_log, tier_stats).
     """
     visibility_points = 0
     total_possible = sum(q["points"] for q in all_queries)
     log = []
+    
+    tier_stats = {
+        "blind_discovery": {"queries": 0, "matches": 0, "pts": 0, "max": 0},
+        "contextual_discovery": {"queries": 0, "matches": 0, "pts": 0, "max": 0},
+        "branded_validation": {"queries": 0, "matches": 0, "pts": 0, "max": 0},
+    }
 
     for q_obj in all_queries:
         tier = q_obj["tier"]
@@ -232,6 +403,9 @@ def _run_stress_test(
         }.get(tier, tier)
 
         console.print(f"  [{tier_label}] {q_text}")
+
+        tier_stats[tier]["queries"] += 1
+        tier_stats[tier]["max"] += pts
 
         matched = False
         try:
@@ -256,6 +430,8 @@ def _run_stress_test(
             matched = _brand_mentioned(brand_name, url, og_title, answer, gemini_client)
             if matched:
                 visibility_points += pts
+                tier_stats[tier]["matches"] += 1
+                tier_stats[tier]["pts"] += pts
                 console.print(f"    [green]✓ MATCH ({pts}pts)[/green]")
             else:
                 console.print(f"    [yellow]✗ no match[/yellow]")
@@ -270,15 +446,15 @@ def _run_stress_test(
             "max_pts": pts,
         })
 
-    return visibility_points, total_possible, log
+    return visibility_points, total_possible, log, tier_stats
 
 def process(state: dict) -> dict:
-    console.print("[cyan]Researcher Node[/cyan]: Starting deep v4.0 Agency-Grade analysis...")
+    console.print("[cyan]Researcher Node[/cyan]: Starting deep v4.5 Agency-Grade analysis...")
     
     # Defaults and status
     metrics = {
+        "Defensible Evidence Depth": 0,
         "Entity Consensus": 0,
-        "Information Gain": 0,
         "Hallucination Risk": 100,
         "Citation Readiness": "Needs Work"
     }
@@ -295,6 +471,10 @@ def process(state: dict) -> dict:
     business_type = state.get("business_type", "tech")
     discovered_location = state.get("discovered_location", "Worldwide")
     lang_name = "Italian" if locale == "it" else "English"
+    
+    # ── Audit Integrity Gating v4.5 ─────────────────────────────────────────────
+    integrity_status = state.get("audit_integrity_status", "valid")
+    integ_reasons = state.get("audit_integrity_reasons", [])
     
     # v4.4 Brand Authority Signals
     schema_type_counts = state.get("schema_type_counts", {})
@@ -341,7 +521,6 @@ def process(state: dict) -> dict:
     ext_quality = state.get("external_data_quality", "high")
 
     # ── SCORE A: Extraction Integrity ──────────────────────────────────────────
-    # Measures how faithfully we captured the site. Only site-side defects apply here.
     ei_score = 100
     ei_score -= (len(extraction_warnings) * 10)
     if quality == "low":
@@ -355,45 +534,46 @@ def process(state: dict) -> dict:
     extraction_integrity = max(10, min(100, ei_score))
 
     # ── SCORE B: Context Reliability ──────────────────────────────────────────
-    # Measures how trustworthy the BUSINESS CONTEXT we assembled is.
-    # This is independent of extraction quality — a well-scraped site can still
-    # have a polluted or fabricated market frame.
     cr_score = 100
-    
-    # Penalise absent or trivially generic schema
     s_counts_cr = state.get("schema_type_counts", {})
     generic_only = all(k in {"WebSite", "WebPage", "BreadcrumbList", "SiteLinksSearchBox"} for k in s_counts_cr)
     if not s_counts_cr:
-        cr_score -= 20   # No schema at all — AI engines have no entity anchor
+        cr_score -= 20
     elif generic_only:
-        cr_score -= 10   # Schema exists but carries zero entity or product specifics
-
-    # Penalise templated / low-quality metadata
+        cr_score -= 10
+    
     og_title_cr = state.get("og_tags", {}).get("og:title", "")
     templated_signals = ["home", "welcome", "untitled", "sample", "default", "page"]
     if og_title_cr and any(sig in og_title_cr.lower() for sig in templated_signals):
-        cr_score -= 15   # OG title looks auto-generated or unconfigured
+        cr_score -= 15
 
-    # Penalise when our validator corrected the orchestrator's classification
-    # (correction itself is good, but it means initial framing was wrong — context is less stable)
     class_notes = state.get("classification_notes", "")
     if class_notes and "confirmed" not in class_notes.lower():
-        cr_score -= 10   # industry was silently changed mid-pipeline
+        cr_score -= 10
 
-    # Penalise polluted external market intelligence
     if ext_quality == "low":
-        cr_score -= 30   # Prospector returned too few or irrelevant competitors
+        cr_score -= 30
     elif ext_quality == "medium":
         cr_score -= 10
 
     context_reliability = max(10, min(100, cr_score))
 
-    # ── BLENDED FINAL SCORE ───────────────────────────────────────────────────
-    confidence_score = int(0.5 * extraction_integrity + 0.5 * context_reliability)
+    # ── BLENDED FINAL SCORE + INTEGRITY CAP v4.5 ──────────────────────────────
+    raw_confidence = int(0.6 * extraction_integrity + 0.4 * context_reliability)
     
-    # Export both sub-scores for downstream use
+    confidence_integrity_cap = 100
+    if integrity_status == "invalid":
+        confidence_integrity_cap = 25
+    elif integrity_status == "degraded":
+        confidence_integrity_cap = 60
+        
+    confidence_score = min(raw_confidence, confidence_integrity_cap)
+    
+    # Export scores for downstream use
+    state["confidence_score"] = confidence_score
     state["extraction_integrity"] = extraction_integrity
     state["context_reliability"] = context_reliability
+    state["confidence_integrity_cap"] = confidence_integrity_cap
     
     gemini_key = os.getenv("GEMINI_API_KEY")
     perplexity_key = os.getenv("PERPLEXITY_API_KEY")
@@ -404,7 +584,7 @@ def process(state: dict) -> dict:
         return state
 
     try:
-        # 1. Setup ChromaDB for Information Gain Analysis
+        # 1. Setup ChromaDB for Evidence Analysis
         os.makedirs("chroma_db", exist_ok=True)
         chroma_client = chromadb.PersistentClient(path="./chroma_db/")
         model_name = "intfloat/multilingual-e5-large" if locale == "it" else "all-MiniLM-L6-v2"
@@ -428,7 +608,6 @@ def process(state: dict) -> dict:
             )
 
         # Stage 2: Expand ChromaDB corpus with market intelligence
-        # This makes Information Gain queries measure client content vs. real market landscape.
         raw_data_for_corpus = state.get("raw_data_complete", {})
         corpus_docs, corpus_meta, corpus_ids = [], [], []
 
@@ -451,55 +630,104 @@ def process(state: dict) -> dict:
             collection.upsert(documents=corpus_docs, metadatas=corpus_meta, ids=corpus_ids)
             console.print(f"[cyan]Researcher Node[/cyan]: ChromaDB corpus enriched with {len(corpus_docs)} market intelligence documents.")
 
-        # Grounding Scanner v2.0 retired (signals moved into Authority Match)
-
-        # 3. THREE-TIER STRESS TEST ENGINE (20% Weight)
-        # T1: blind_discovery   — from faq_patterns (no LLM, pure intent signal)
-        # T2: contextual_discovery — from topic_gaps  (one small Gemini phrasing call)
-        # T3: branded_validation — from brand context (fully deterministic, no LLM)
+        # 3. THREE-TIER STRESS TEST ENGINE (v4.5 Integrity Hardened)
         console.print(f"[cyan]Researcher Node[/cyan]: Executing 3-Tier Evidence-Derived Stress Test for '{brand_name}'...")
-        visibility_points = 0
-        stress_test_log = []
-
+        
         raw_data_st = state.get("raw_data_complete", {})
         faq_patterns_st    = raw_data_st.get("faq_patterns", [])
         topic_gaps_st      = raw_data_st.get("topic_gaps", [])
         competitor_ents_st = raw_data_st.get("competitor_entities", [])
         authority_ents_st  = raw_data_st.get("authority_entities", [])
         og_title_st        = state.get("og_tags", {}).get("og:title", "")
+        
+        is_local = (scale_level == "Local" or state.get("business_profile", {}).get("location_enforce", False))
+        brand_tokens = _extract_brand_tokens(brand_name, url, og_title_st)
+        gemini_client_st = genai.Client(api_key=gemini_key)
 
-        # Configurable per-tier budgets (agency operators can set via .env)
         STRESS_TEST_BUDGET = {
             "blind":       int(os.getenv("GEO_T1_BUDGET", "8")),
             "contextual":  int(os.getenv("GEO_T2_BUDGET", "10")),
             "branded":     int(os.getenv("GEO_T3_BUDGET", "6")),
         }
 
-        gemini_client_st = genai.Client(api_key=gemini_key)
+        # Query Generation
+        loc_conf = state.get("location_confidence", "high")
+        t1_raw = _build_blind_queries(faq_patterns_st, authority_ents_st, brand_tokens, is_local, discovered_location, locale, gemini_client_st, STRESS_TEST_BUDGET["blind"])
+        t2_raw = _build_contextual_queries(topic_gaps_st, brand_tokens, is_local, discovered_location, locale, gemini_client_st, STRESS_TEST_BUDGET["contextual"], state.get("business_profile", {}).get("persona_templates", []))
+        
+        # Patch query calls to include location_confidence
+        for q_obj in t1_raw:
+            q_text = q_obj.get("query")
+            if q_text:
+                sanitized, reason = _sanitize_or_reject_query(q_text, "blind_discovery", brand_tokens, is_local, discovered_location, locale, industry="market", location_confidence=loc_conf)
+                q_obj["query"] = sanitized
 
-        t1_queries = _build_blind_queries(faq_patterns_st, authority_ents_st, lang_name, STRESS_TEST_BUDGET["blind"])
-        t2_queries = _build_contextual_queries(topic_gaps_st, lang_name, gemini_client_st, STRESS_TEST_BUDGET["contextual"])
-        t3_queries = _build_branded_queries(
-            brand_name, target_industry, discovered_location, scale_level, locale,
-            competitor_ents_st, STRESS_TEST_BUDGET["branded"]
-        )
+        for q_obj in t2_raw:
+            q_text = q_obj.get("query")
+            if q_text:
+                sanitized, reason = _sanitize_or_reject_query(q_text, "contextual_discovery", brand_tokens, is_local, discovered_location, locale, location_confidence=loc_conf)
+                q_obj["query"] = sanitized
 
-        all_queries = t1_queries + t2_queries + t3_queries
-        console.print(
-            f"  Tiers: T1={len(t1_queries)} blind | "
-            f"T2={len(t2_queries)} contextual | "
-            f"T3={len(t3_queries)} branded | "
-            f"Total={len(all_queries)} queries"
-        )
+        t3_queries = _build_branded_queries(brand_name, target_industry, discovered_location, scale_level, locale, competitor_ents_st, STRESS_TEST_BUDGET["branded"])
 
-        visibility_points, total_possible, stress_test_log = _run_stress_test(
+        # ── FAIL-SAFE LINT GATE & BACKFILL ─────────────────────────────────────
+        t1_queries = [q for q in t1_raw if q.get("query")]
+        t2_queries = [q for q in t2_raw if q.get("query")]
+
+        t1_fallback_count = 0
+        t2_fallback_count = 0
+
+        # BACKFILL Logic (Agency-Grade)
+        def _get_fallback_queries(type_key, profile, loc, locale_code, budget_limit, existing_count):
+            fallback_map = profile.get(f"{type_key}_fallback_templates", {})
+            templates = fallback_map.get(locale_code, fallback_map.get("en", []))
+            needed = budget_limit - existing_count
+            added = []
+            if needed > 0 and templates:
+                for t in templates[:needed]:
+                    q_text = _inject_geo_context(t, loc, locale_code) if is_local else t
+                    added.append({"query": q_text, "tier": f"{type_key}_discovery", "points": 25 if type_key == "blind" else 15})
+            return added
+
+        if len(t1_queries) < 3:
+            console.print("      [yellow]T1 Integrity Guard: Backfilling realistic profile templates.[/yellow]")
+            added = _get_fallback_queries("blind", state.get("business_profile", {}), discovered_location, locale, 5, len(t1_queries))
+            t1_queries.extend(added)
+            t1_fallback_count = len(added)
+
+        if len(t2_queries) < 3:
+            console.print("      [yellow]T2 Integrity Guard: Backfilling realistic profile templates.[/yellow]")
+            added = _get_fallback_queries("contextual", state.get("business_profile", {}), discovered_location, locale, 5, len(t2_queries))
+            t2_queries.extend(added)
+            t2_fallback_count = len(added)
+
+        all_queries = t1_queries[:STRESS_TEST_BUDGET["blind"]] + t2_queries[:STRESS_TEST_BUDGET["contextual"]] + t3_queries
+        
+        # Diagnostics
+        total_q = len(all_queries)
+        total_fallback = t1_fallback_count + t2_fallback_count
+        intent_buckets = set()
+        for q in all_queries:
+            # Simple heuristic for intent diversity
+            tokens = q["query"].lower().split()
+            if any(t in tokens for t in ["miglior", "best", "top"]): intent_buckets.add("best_of")
+            if any(t in tokens for t in ["come", "how", "perché", "why"]): intent_buckets.add("educational")
+            if any(t in tokens for t in ["costo", "prezzo", "cost", "price"]): intent_buckets.add("transactional")
+            if len(tokens) > 5: intent_buckets.add("long_tail")
+        
+        state["stress_test_diagnostics"] = {
+            "query_count": total_q,
+            "fallback_count": total_fallback,
+            "bucket_diversity": len(intent_buckets),
+            "point_conversion": sum(q.get("points", 0) for q in all_queries) / total_q if total_q > 0 else 0
+        }
+        
+        visibility_points, total_possible, stress_test_log, tier_stats = _run_stress_test(
             all_queries, str(perplexity_key), brand_name, url, og_title_st, gemini_client_st
         )
 
-        # Dynamic ceiling — scales with actual query count, no hardcoded /140
         visibility_score = min(100, int((visibility_points / max(total_possible, 1)) * 100))
 
-        # Tier breakdown for state
         stress_test_summary = {
             "t1_blind_queries":       len(t1_queries),
             "t2_contextual_queries":  len(t2_queries),
@@ -507,21 +735,18 @@ def process(state: dict) -> dict:
             "total_queries":          len(all_queries),
             "total_possible_points":  total_possible,
             "matched_points":         visibility_points,
+            "tier_metrics":           tier_stats,
+            "provenance": "Direct Context Search" if visibility_score > 0 else "Profile Inferred"
         }
         state["stress_test_log"]     = stress_test_log
         state["stress_test_summary"] = stress_test_summary
-        console.print(
-            f"[green]Stress Test[/green]: {visibility_points}/{total_possible}pts → "
-            f"visibility_score={visibility_score}"
-        )
+        state["stress_test_tier_stats"] = tier_stats
 
-        # 4. AUTHORITY MATCH v4.5 (Multi-dimensional Trust)
+        # 4. AUTHORITY MATCH v4.5
         console.print("[cyan]Researcher Node[/cyan]: Calculating Authority Match...")
         raw_data = state.get("raw_data_complete", {})
         authority_ents = raw_data.get("authority_entities", [])
         
-        # Dimension A: Entity Cohabitation (40%)
-        # Do they write about the same entities the authorities write about?
         def fuzzy_match(entity, text):
             e_norm = re.sub(r'[^\w\s]', '', str(entity).lower().strip())
             suffixes = [" spa", " s.p.a.", " ltd", " inc", " srl", " llc", " gmbh", " s.r.l."]
@@ -536,7 +761,6 @@ def process(state: dict) -> dict:
         matched_auth = sum(1 for e in authority_ents if fuzzy_match(e, client_content))
         auth_cov = (matched_auth / max(len(authority_ents), 1)) * 40.0
 
-        # Dimension B: Technical Trust Signals (30%)
         tech_trust = 0
         if locale == "it":
             content_lower = client_content.lower()
@@ -547,7 +771,6 @@ def process(state: dict) -> dict:
             if state.get("robots_txt_status") == "allowed": tech_trust += 15
             if state.get("hreflang_count", 0) > 0: tech_trust += 15
 
-        # Dimension C: Structured Data Authority (30%)
         schema_auth = 0
         s_counts = state.get("schema_type_counts", {})
         if any(k in s_counts for k in ["Organization", "LocalBusiness"]): schema_auth += 10
@@ -556,17 +779,17 @@ def process(state: dict) -> dict:
 
         authority_match_score = max(15, min(100, int(auth_cov + tech_trust + schema_auth)))
 
-        # 5. INFORMATION GAIN v4.5 (Rigorous LLM Evaluation)
-        console.print("[cyan]Researcher Node[/cyan]: Calculating Information Gain rigorously...")
-        ig_score = 0.0
+        # 5. DEFENSIBLE EVIDENCE DEPTH (Formerly Information Gain)
+        console.print("[cyan]Researcher Node[/cyan]: Calculating Defensible Evidence Depth...")
+        eg_score = 0.0
         faqs = raw_data.get("faq_patterns", [])
         topic_gaps = raw_data.get("topic_gaps", [])
         frameworks = state.get("original_frameworks", [])
         
         try:
             ig_prompt = f"""
-            Evaluate the Information Gain of this website against its precise market.
-            Information Gain is the unique, proprietary value this site provides that competitors do not.
+            Evaluate the Defensible Evidence Depth of this website against its precise market.
+            This measures unique, factual, and proprietary value provided by the site.
             
             Market Topic Gaps: {topic_gaps[:5]}
             Market FAQs: {faqs[:5]}
@@ -574,12 +797,12 @@ def process(state: dict) -> dict:
             
             Site Content Snippet: {client_content[:6000]}
             
-            Score the site's Information Gain from 0 to 100 based on this rigorous rubric:
-            1. Does the site explicitly address the Market Topic Gaps with specific solutions? (0-30 pts)
-            2. Does it answer the exact Market FAQs comprehensively? (0-30 pts)
-            3. Does it possess clearly identified unique frameworks, original data, or proprietary technology? (0-40 pts)
+            Score from 0 to 100 based on this rigorous rubric:
+            1. Solutions for Market Topic Gaps (0-30 pts)
+            2. Comprehensive FAQ answers (0-30 pts)
+            3. Unique frameworks or proprietary data (0-40 pts)
             
-            Return ONLY a single integer between 0 and 100.
+            Return ONLY a single integer.
             """
             def _ig_req():
                 return gemini_client_st.models.generate_content(
@@ -589,139 +812,101 @@ def process(state: dict) -> dict:
             ig_res = execute_with_backoff(_ig_req, max_retries=2, initial_delay=2.0)
             ig_match = re.search(r'\d+', ig_res.text)
             if ig_match:
-                ig_score = float(ig_match.group(0))
+                eg_score = float(ig_match.group(0))
         except Exception as e:
-            console.print(f"[yellow]IG Math fallback due to error: {e}[/yellow]")
-            ig_score = 30.0 # conservative fallback
+            eg_score = 30.0 # conservative fallback
             
-        metrics["Information Gain"] = int(min(100, max(0, ig_score)))
+        metrics["Defensible Evidence Depth"] = int(min(100, max(0, eg_score)))
 
-        # 6. FINAL VISIBILITY & HALLUCINATION RISK v4.5
-        # The stress test (which runs externally on Perplexity) is the heaviest realistic signal
-        total_visibility = (visibility_score * 0.45) + (authority_match_score * 0.30) + (metrics["Information Gain"] * 0.25)
+        # 6. FINAL VISIBILITY & HALLUCINATION RISK
+        total_visibility = (visibility_score * 0.45) + (authority_match_score * 0.30) + (metrics["Defensible Evidence Depth"] * 0.25)
         
-        # Risk is the inverse of visibility, amplified by how low our confidence is
-        # If confidence is low, the stated hallucination risk increases proportionately
         base_risk = 100 - total_visibility
         confidence_penalty = (100 - confidence_score) * 0.5
         risk_score = min(95, max(5, int(base_risk + confidence_penalty)))
         
         metrics["Hallucination Risk"] = risk_score
         metrics["Entity Consensus"] = int(authority_match_score)
-        metrics["Citation Readiness"] = "Enterprise-Ready" if total_visibility > 85 else "Agency-Ready" if total_visibility > 65 else "Needs Work"
+        
+        status_label = "Enterprise-Ready" if total_visibility > 85 else "Agency-Ready" if total_visibility > 65 else "Needs Work"
+        metrics["Citation Readiness"] = f"{status_label} [PROVISIONAL]" if integrity_status != "valid" else status_label
 
-        # Metadata updates (Do not emit Unverified, use Low Verification)
         if confidence_score < 40: citation_status = "Low Verification"
         elif total_visibility > 60 and confidence_score >= 80: citation_status = "Verified"
         elif total_visibility > 30: citation_status = "Partially Verified"
         else: citation_status = "Low Verification"
         
-        ig = metrics["Information Gain"]
+        ed = metrics["Defensible Evidence Depth"]
         if confidence_score < 40 or citation_status == "Low Verification":
             projected_traffic_lift = "0–5%"
         elif confidence_score < 75:
-            projected_traffic_lift = "3–8%" if ig < 40 else "8–18%"
+            projected_traffic_lift = "3–8%" if ed < 40 else "8–18%"
         else:
-            projected_traffic_lift = "8–18%" if ig < 60 else "18–30%"
+            projected_traffic_lift = "8–18%" if ed < 60 else "18–30%"
 
     except Exception as e:
         console.print(f"[bold red]Researcher Logic Failure: {e}[/bold red]")
 
-    # 6. Final Recommendation Pack
+    # 7. Final Recommendation Pack
     try:
         time.sleep(5)
-
-        # Stage 1: pull grounding context assembled by ContentStrategist
-        # Falls back gracefully to an empty string if ContentStrategist was skipped.
         grounding_context = state.get("grounding_context", "")
-
-        # Enrich grounding with fields only available post-Researcher
-        e_e_a_t_gaps_str = "; ".join(state.get("e_e_a_t_gaps", [])) or "none identified"
-        frameworks_str = "; ".join(state.get("original_frameworks", [])) or "none identified"
-        rec_content_str = "; ".join(state.get("recommended_content", [])) or "none identified"
+        e_e_a_t_gaps_str = "; ".join(_safe_stringify_list(state.get("e_e_a_t_gaps", []))) or "none identified"
+        frameworks_str = "; ".join(_safe_stringify_list(state.get("original_frameworks", []))) or "none identified"
+        rec_content_str = "; ".join(_safe_stringify_list(state.get("recommended_content", []))) or "none identified"
 
         rec_prompt = f"""
-        Act as Senior GEO Strategist writing an agency deliverable for a paying client.
-
-        ## Collected Market Intelligence
-        {grounding_context}
-
-        ## ContentStrategist Findings
-        - E-E-A-T gaps identified: {e_e_a_t_gaps_str}
-        - Proprietary IP/frameworks on site: {frameworks_str}
-        - Recommended new content (from strategist): {rec_content_str}
-
-        ## Agency Metrics
-        Visibility: {total_visibility:.1f}/100 | Info Gain: {metrics['Information Gain']}% | Hallucination Risk: {metrics['Hallucination Risk']}%
-        Citation Readiness: {metrics['Citation Readiness']} | Confidence: {confidence_score}/100
-        URL: {url}
-
+        Act as Senior GEO Strategist. Write an agency deliverable.
+        Context: {grounding_context}
+        E-E-A-T gaps: {e_e_a_t_gaps_str}
+        IP/Frameworks: {frameworks_str}
+        Rec Content: {rec_content_str}
+        
+        Metrics: Visibility: {total_visibility:.1f}/100 | Evidence Depth: {metrics['Defensible Evidence Depth']}% | Confidence: {confidence_score}/100
+        Integrity Status: {integrity_status} ({', '.join(integ_reasons)})
+        
         MANDATORY RULES:
-        - Ground EVERY recommendation in the market intelligence above. Name specific gaps, competitors, or FAQ patterns.
-        - DO NOT invent technical SEO issues not present in the data.
-        - Use agency-safe hedging: "evidence suggests", "inferred opportunity", "manual verification recommended".
-        - If evidence is missing for a dimension, say so explicitly.
+        - Ground EVERY recommendation in market data.
+        - If integrity_status is not 'valid', tag titles with [PROVISIONAL].
         - Output language: {lang_name}
-
-        Return STRICTLY a JSON array of recommendation objects:
-        [
-          {{
-            "title": "Clear Actionable Title",
-            "rationale": "Why this matters, grounded in the market data above",
-            "priority": "High|Medium|Low",
-            "implementation_type": "Technical|Content|Authority"
-          }}
-        ]
+        
+        Return STRICTLY a JSON array of objects with keys: title, rationale, priority, implementation_type.
         """
         gemini_client = genai.Client(api_key=gemini_key)
         res_rec = gemini_client.models.generate_content(model='gemini-2.5-flash-lite', contents=rec_prompt, config={"response_mime_type": "application/json"})
         
         try:
             clean_text = res_rec.text.strip()
-            if clean_text.startswith("```json"):
-                clean_text = clean_text[7:]
-            if clean_text.startswith("```"):
-                clean_text = clean_text[3:]
-            if clean_text.endswith("```"):
-                clean_text = clean_text[:-3]
-                
+            if clean_text.startswith("```json"): clean_text = clean_text[7:]
+            if clean_text.startswith("```"): clean_text = clean_text[3:]
+            if clean_text.endswith("```"): clean_text = clean_text[:-3]
             geo_recommendation_pack_json = json.loads(clean_text.strip())
             geo_recommendation_pack = json.dumps(geo_recommendation_pack_json, indent=2)
         except:
             geo_recommendation_pack = res_rec.text
             
-        research_output = f"v4.3 Agency-Grade Analysis Complete. Readiness: {metrics['Citation Readiness']}."
+        research_output = f"v4.5 Analysis Complete. Integrity: {integrity_status}."
     except Exception as e:
-        console.print(f"[yellow]Recommendation generation skipped or failed: {e}[/yellow]")
-        pass
+        console.print(f"[yellow]Recommendation generation skipped: {e}[/yellow]")
 
     state["metrics"] = metrics
     state["citation_status"] = citation_status
     state["projected_traffic_lift"] = projected_traffic_lift
     state["geo_recommendation_pack"] = geo_recommendation_pack
     state["research_output"] = research_output
-    
-    # Additive fields
-    state["confidence_score"] = confidence_score
-    state["evidence_quality"] = depth.get("extraction_quality", "Low") if isinstance(depth, dict) else "Low"
     state["visibility_score"] = int(total_visibility) if 'total_visibility' in locals() else 0
-    state["grounding_score"] = grounding_score if 'grounding_score' in locals() else 0
     state["authority_match_score"] = int(authority_match_score) if 'authority_match_score' in locals() else 0
-    state["extraction_quality"] = depth.get("extraction_quality", "Low") if isinstance(depth, dict) else "Low"
-    state["evidence_limitations"] = "Low confidence due to parsing issues or lack of structured data." if confidence_score < 50 else "Adequate confidence."
+    state["evidence_limitations"] = "Low confidence due to parsing issues." if confidence_score < 50 else "Adequate confidence."
 
-    # Stage 3: Italian trust signals stored for Finalizer and downstream use
     if state.get("locale") == "it":
         _content = state.get("client_content_clean", "").lower()
-        import re as _re
         state["italian_trust_signals"] = {
-            "piva_detected":            bool(_re.search(r'p\.?\s*i\.?\s*v\.?\s*a\.?\s*[:=]?\s*\d{11}', _content)),
-            "pec_detected":             bool(_re.search(r'@pec\.|posta\s+certificata', _content)),
-            "rea_detected":             bool(_re.search(r'\brea\b\s*[:=]?\s*[a-z]{2}\s*\d+', _content)),
+            "piva_detected": bool(re.search(r'p\.?\s*i\.?\s*v\.?\s*a\.?\s*[:=]?\s*\d{11}', _content)),
+            "pec_detected": bool(re.search(r'@pec\.|posta\s+certificata', _content)),
+            "rea_detected": bool(re.search(r'\brea\b\s*[:=]?\s*[a-z]{2}\s*\d+', _content)),
             "camera_commercio_detected": 'camera di commercio' in _content,
-            "codice_fiscale_detected":   bool(_re.search(r'codice\s+fiscale\s*[:=]?\s*[a-z0-9]{16}', _content)),
         }
     else:
         state["italian_trust_signals"] = {}
-    
+        
     return state

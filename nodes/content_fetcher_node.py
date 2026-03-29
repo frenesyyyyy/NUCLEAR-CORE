@@ -1,6 +1,7 @@
 import json
 import re
 import requests
+import time
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from rich.console import Console
@@ -9,423 +10,398 @@ import os
 console = Console()
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Refined Fetch Helpers
+# ---------------------------------------------------------------------------
+
+def _primary_fetch(url: str, headers: dict, timeout: int = 12) -> tuple[requests.Response | None, str]:
+    """Execute a standard requests.get fetch."""
+    try:
+        response = requests.get(url, headers=headers, timeout=timeout)
+        return response, f"HTTP {response.status_code}"
+    except Exception as e:
+        return None, f"Exception: {str(e)}"
+
+def _scraperapi_fetch(url: str, locale_code: str = "en") -> tuple[str, str]:
+    """Execute a ScraperAPI rendered fetch with basic retry."""
+    api_key = os.getenv("SCRAPER_API_KEY", "").strip()
+    if not api_key:
+        return "", "ScraperAPI Key Missing"
+    
+    last_reason = "ScraperAPI Timeout"
+    for attempt in range(2):
+        try:
+            # Construct ScraperAPI URL via params for robustness
+            params = {
+                "api_key": api_key,
+                "url": url,
+                "render": "true"
+            }
+            if locale_code == "it":
+                params["country_code"] = "it"
+                
+            console.print(f"   [yellow]ScraperAPI Rescue[/yellow] (Attempt {attempt+1}): Rendering {url}...")
+            r = requests.get("https://api.scraperapi.com/", params=params, timeout=60)
+            if r.status_code == 200:
+                return r.text, "ScraperAPI Success"
+            
+            last_reason = f"ScraperAPI Error: HTTP {r.status_code}"
+            if r.status_code in [500, 502, 503, 504]:
+                time.sleep(2)
+                continue
+            else:
+                break # Non-retryable error
+        except Exception as e:
+            last_reason = f"ScraperAPI Exception: {str(e)}"
+            time.sleep(1)
+            
+    return "", last_reason
+
+def _looks_blocked_response(status_code: int, html: str, text: str) -> bool:
+    """Detect if the response is a block/challenge page."""
+    if status_code in [401, 403, 429, 503]:
+        return True
+    
+    html_lower = html.lower()
+    block_patterns = [
+        "access denied", "forbidden", "captcha", "verify you are human",
+        "attention required", "cloudflare", "akamai", "bot protection",
+        "request blocked", "enable javascript and cookies", "security check",
+        "please wait while we verify", "incapsula", "distil networks"
+    ]
+    
+    # If patterns exist and content is very thin, it's likely a block
+    if any(p in html_lower for p in block_patterns) and len(text) < 500:
+        return True
+    
+    return False
+
+def _looks_thin_or_shell(html: str, text: str) -> bool:
+    """Detect if the response is an empty JS shell or extremely thin content."""
+    word_count = len(text.split())
+    # Generic shell signals
+    if word_count < 120 and len(html) > 5000:
+        return True
+    if "noscript" in html.lower() and word_count < 100:
+        return True
+    return False
+
+def _choose_best_html(primary_html: str, rendered_html: str, primary_text: str, rendered_text: str) -> tuple[str, str, str]:
+    """
+    Select the highest quality HTML based on semantic criteria.
+    Returns: (chosen_html, source_label, debug_note)
+    """
+    if not rendered_html:
+        return primary_html, "primary", "ScraperAPI failed or skipped; using primary."
+    
+    if not primary_html:
+        return rendered_html, "scraperapi_rendered", "Primary failed; using ScraperAPI."
+
+    primary_wc = len(primary_text.split())
+    rendered_wc = len(rendered_text.split())
+    
+    # Heuristic: If rendered has >= 2x text or crosses the "thin" threshold while primary doesn't
+    if rendered_wc > primary_wc * 1.5 and rendered_wc > 150:
+        return rendered_html, "scraperapi_rendered", f"Rendered HTML selected (Richness: {rendered_wc} vs {primary_wc} words)."
+    
+    return primary_html, "primary", f"Primary HTML retained (Sufficient richness: {primary_wc} words)."
+
+# ---------------------------------------------------------------------------
+# Semantic Extraction
 # ---------------------------------------------------------------------------
 
 def _extract_body_text(soup: BeautifulSoup) -> str:
-    """
-    Stage 1 fix: paragraph-level extraction instead of soup.get_text().
-    Targets only semantic content tags; skips nav/footer/script noise.
-    Requires a minimum token length to avoid button labels and breadcrumbs.
-    """
+    """Paragraph-level extraction with preservation of semantic markers."""
+    # Create a copy to avoid destroying the original soup used for diagnostics
+    s = BeautifulSoup(str(soup), "html.parser")
+    
+    # Selective noise removal: Do NOT decompose headers/footers entirely yet 
+    # as they often contain critical Marketplace signals (onboarding/CTA)
+    for noise in s(["script", "style", "noscript", "aside", "form"]):
+        noise.decompose()
+        
     body_parts = []
-    for tag in soup.find_all(["p", "li", "h1", "h2", "h3", "h4", "blockquote", "td", "dt", "dd"]):
+    # Targeted extraction including CTA buttons and list items often used for benefit cards
+    for tag in s.find_all(["p", "li", "h1", "h2", "h3", "h4", "blockquote", "td", "dt", "dd", "span", "a"]):
+        # Special handling for Span/A: only if they look like CTAs or bold emphasis
+        if tag.name in ["span", "a"]:
+            text = tag.get_text(strip=True)
+            if len(text) > 10 and (tag.name == "a" or any(c in str(tag).lower() for c in ["btn", "cta", "button", "hero"])):
+                body_parts.append(f"[{text}]")
+            continue
+            
         text = tag.get_text(separator=" ", strip=True)
-        if len(text) > 40:          # drop link labels / button text / nav items
+        if len(text) > 30:
             body_parts.append(text)
+            
     return " ".join(body_parts)
 
-
-def _parse_schema_blocks(soup: BeautifulSoup, json_ld_blocks: list, schema_type_counts: dict) -> None:
-    """
-    Parse JSON-LD blocks from a soup object in-place into the shared accumulators.
-    Handles single objects, lists, and @graph containers.
-    """
+def _detect_semantic_signals(soup: BeautifulSoup, word_count: int, schema_counts: dict) -> dict:
+    """Count structural signals to calibrate evidence density even for thin content."""
+    signals = {
+        "heading_count": len(soup.find_all(["h1", "h2", "h3"])),
+        "cta_count": len(soup.find_all(["a", "button"], string=re.compile(r'Sign up|Log in|Order|Start|Join|Register|Become|Partner|Accedi|Ordina|Entra|Inizia|Diventa', re.I))),
+        "semantic_section_count": len(soup.find_all(["section", "article", "main"])),
+        "schema_signal_count": sum(schema_counts.values()),
+        "word_count": word_count
+    }
+    
+    # Identify specific marketplace signals
+    summary = []
+    if signals["cta_count"] > 2: summary.append("High CTA Density")
+    if signals["schema_signal_count"] > 2: summary.append("Rich Schema Foundations")
+    if signals["heading_count"] > 3: summary.append("Structured Argumentation")
+    if signals["semantic_section_count"] > 2: summary.append("Modular Content Layout")
+    
+    signals["extraction_signal_summary"] = ", ".join(summary) if summary else "Linear/Unstructured"
+    return signals
+def _parse_schema_blocks(soup: BeautifulSoup, json_ld_blocks: list, schema_type_counts: dict):
+    """Parses JSON-LD blocks and updates schema counts."""
     for script in soup.find_all("script", type="application/ld+json"):
         raw = script.string or script.get_text()
-        if not raw:
-            continue
+        if not raw: continue
         try:
             block = json.loads(raw.strip())
             blocks = block if isinstance(block, list) else [block]
             for b in blocks:
-                if not isinstance(b, dict):
-                    continue
-                # Direct @type
-                for t in ([b["@type"]] if isinstance(b.get("@type"), str) else (b.get("@type") or [])):
-                    schema_type_counts[t] = schema_type_counts.get(t, 0) + 1
-                # @graph children
+                if not isinstance(b, dict): continue
+                types = b.get("@type", [])
+                if isinstance(types, str): types = [types]
+                for t in types: schema_type_counts[t] = schema_type_counts.get(t, 0) + 1
+                
+                # Check for @graph
                 for item in b.get("@graph", []):
                     if isinstance(item, dict):
-                        for t in ([item["@type"]] if isinstance(item.get("@type"), str) else (item.get("@type") or [])):
-                            schema_type_counts[t] = schema_type_counts.get(t, 0) + 1
+                        itpes = item.get("@type", [])
+                        if isinstance(itpes, str): itpes = [itpes]
+                        for it in itpes: schema_type_counts[it] = schema_type_counts.get(it, 0) + 1
             json_ld_blocks.append(raw.strip())
-        except Exception:
-            pass
+        except Exception: pass
 
-
-def _extract_og_tags(soup: BeautifulSoup) -> dict:
-    """Stage 2: Extract OpenGraph metadata."""
-    og = {}
-    for meta in soup.find_all("meta"):
-        prop = meta.get("property", "") or meta.get("name", "")
-        if prop.startswith("og:"):
-            og[prop] = meta.get("content", "").strip()
-    return og
-
-
-def _extract_twitter_tags(soup: BeautifulSoup) -> dict:
-    """Stage 2: Extract Twitter/X card metadata."""
-    tw = {}
-    for meta in soup.find_all("meta"):
-        name = meta.get("name", "")
-        if name.startswith("twitter:"):
-            tw[name] = meta.get("content", "").strip()
-    return tw
-
-
-def _check_robots_txt(base_url: str, headers: dict) -> str:
-    """
-    Stage 2: Fetch /robots.txt and assess AI crawler policy.
-    Returns: 'restricted', 'partial', or 'allowed'.
-    """
-    try:
-        scheme = urlparse(base_url).scheme
-        domain = urlparse(base_url).netloc
-        robots_url = f"{scheme}://{domain}/robots.txt"
-        r = requests.get(robots_url, headers=headers, timeout=5)
-        if r.status_code != 200:
-            return "not_found"
-        content = r.text.lower()
-        ai_bots = ["gptbot", "perplexitybot", "anthropic-ai", "claudebot", "googlebot-extended"]
-        disallowed_for_all = "user-agent: *" in content and "disallow: /" in content
-        blocked_bots = [b for b in ai_bots if b in content]
-        if disallowed_for_all:
-            return "restricted"
-        if blocked_bots:
-            return "partial"
-        return "allowed"
-    except Exception:
-        return "not_found"
-
-
-def _discover_sitemap_urls(base_url: str, headers: dict, limit: int = 12) -> list:
-    """
-    Stage 2: Attempt to read sitemap.xml and return internal page URLs.
-    Falls back gracefully if the sitemap is absent or malformed.
-    """
-    try:
-        scheme = urlparse(base_url).scheme
-        domain = urlparse(base_url).netloc
-        sitemap_url = f"{scheme}://{domain}/sitemap.xml"
-        r = requests.get(sitemap_url, headers=headers, timeout=8)
-        if r.status_code != 200:
-            return []
-        # Extract <loc> tags - works for both sitemap index and urlset
-        locs = re.findall(r"<loc>(.*?)</loc>", r.text, re.IGNORECASE)
-        internal = [l.strip() for l in locs if urlparse(l.strip()).netloc == domain]
-        return internal[:limit]
-    except Exception:
-        return []
-
-
-def _is_js_heavy_page(word_count: int, raw_html_len: int) -> bool:
-    """
-    Stage 1 fix: a page is JS-heavy when it has thin text AND a small HTML payload.
-    (Small payload = likely a shell div with no pre-rendered content.)
-    Previous logic had this inverted.
-    """
-    return word_count < 100 and raw_html_len < 40000
-
-
-def _js_fallback(url: str, headers: dict) -> str:
-    """
-    Stage 3: Attempt ScraperAPI JS-rendered fetch.
-    Returns rendered HTML string or empty string on any failure.
-    """
-    api_key = os.getenv("SCRAPER_API_KEY", "").strip()
-    if not api_key:
-        return ""
-    try:
-        scraper_url = (
-            f"https://api.scraperapi.com/"
-            f"?api_key={api_key}&url={requests.utils.quote(url, safe='')}&render=true"
-        )
-        console.print("   [yellow]JS Fallback[/yellow]: Attempting ScraperAPI render...")
-        r = requests.get(scraper_url, timeout=45)
-        if r.status_code == 200:
-            return r.text
-    except Exception as e:
-        console.print(f"   [yellow]JS Fallback skipped[/yellow]: {e}")
+def _extract_business_address(soup: BeautifulSoup, json_ld_blocks: list) -> str:
+    """Extracts business address from schema or body for geo-corroboration."""
+    # 1. Try JSON-LD first
+    for block_raw in json_ld_blocks:
+        try:
+            b = json.loads(block_raw)
+            blocks = b if isinstance(b, list) else [b]
+            for item in blocks:
+                # Direct or @graph
+                candidates = [item] + item.get("@graph", [])
+                for c in candidates:
+                    if not isinstance(c, dict): continue
+                    addr = c.get("address")
+                    if isinstance(addr, dict):
+                        parts = [addr.get("streetAddress"), addr.get("addressLocality"), addr.get("postalCode")]
+                        found = ", ".join([str(p) for p in parts if p])
+                        if found: return found
+                    elif isinstance(addr, str):
+                        return addr
+        except: pass
+    
+    # 2. Try Microdata (simplified)
+    addr_tag = soup.find(attrs={"itemprop": "address"})
+    if addr_tag:
+        return addr_tag.get_text(separator=" ", strip=True)
+        
     return ""
 
+def _extract_metadata(soup: BeautifulSoup) -> dict:
+    meta = {}
+    meta["title"] = soup.title.string.strip() if soup.title and soup.title.string else ""
+    desc_tag = soup.find("meta", attrs={"name": "description"})
+    meta["description"] = desc_tag.get("content", "").strip() if desc_tag else ""
+    can_tag = soup.find("link", rel="canonical")
+    meta["canonical"] = can_tag.get("href", "").strip() if can_tag else ""
+    
+    og = {}
+    for m in soup.find_all("meta"):
+        prop = m.get("property", "") or m.get("name", "")
+        if prop.startswith("og:"): og[prop] = m.get("content", "").strip()
+    meta["og"] = og
 
-# ---------------------------------------------------------------------------
-# Node entry point
-# ---------------------------------------------------------------------------
+    tw = {}
+    for m in soup.find_all("meta"):
+        name = m.get("name", "")
+        if name.startswith("twitter:"): tw[name] = m.get("content", "").strip()
+    meta["twitter"] = tw
+    
+    return meta
 
 def process(state: dict) -> dict:
-    console.print("[cyan]Content Fetcher Node[/cyan]: Fetching url content...")
+    console.print("[cyan]Content Fetcher Node[/cyan]: Starting v4.5 Anti-Block Rescue Fetch...")
 
-    url = state.get("url", "")
-    locale_code = state.get("locale", "en")
-
-    # ── defaults (state contract: all existing keys preserved) ──
+    # A. INITIALIZE DEFAULTS & DEBUG FIELDS
+    fetch_debug_log = []
+    fetch_strategy_used = "failed"
+    primary_fetch_status = None
+    scraperapi_used = False
+    scraperapi_success = False
+    rendered_fetch_used = False
+    
     client_content_raw = ""
     client_content_clean = ""
-    client_content_depth = {
-        "word_count": 0,
-        "paragraph_count": 0,
-        "heading_count": 0,
-        "js_heavy_detected": False,
-        "extraction_quality": "Failed",
-        "schema_block_count": 0
-    }
-    content_fetch_notes = ""
-    page_title = ""
-    meta_description = ""
-    canonical_url = ""
-    hreflang_count = 0
     json_ld_blocks = []
     schema_type_counts = {}
-    fetched_page_urls = []
-
-    # ── new state keys (Stage 2+3) ──
-    og_tags = {}
-    twitter_tags = {}
-    robots_txt_status = "not_found"
-    sitemap_urls = []
-    js_fallback_used = False
-
+    
+    url = state.get("url", "")
+    locale_code = state.get("locale", "en")
+    
     if not url:
-        console.print("[bold red]NODE_FAILED[/bold red]: Content Fetcher (No URL provided). Using fallbacks.")
-        content_fetch_notes = "Failed: No URL"
-    else:
+        state.update({
+            "audit_integrity_status": "invalid", 
+            "audit_integrity_reasons": ["No URL provided."],
+            "source_of_truth_mode": "failed"
+        })
+        return state
+
+    try:
         headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/122.0.0.0 Safari/537.36"
-            ),
-            "Accept-Language": (
-                "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7"
-                if locale_code == "it"
-                else "en-US,en;q=0.9"
-            ),
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7" if locale_code == "it" else "en-US,en;q=0.9",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
 
-        # ── Stage 2: robots.txt (early signal, independent of page fetch) ──
-        robots_txt_status = _check_robots_txt(url, headers)
-        if robots_txt_status == "restricted":
-            console.print("   [yellow]Warning[/yellow]: robots.txt restricts all crawlers. AI indexability may be blocked.")
+        # B. PRIMARY FETCH
+        primary_res, primary_reason = _primary_fetch(url, headers)
+        primary_html = primary_res.text if primary_res and primary_res.status_code == 200 else ""
+        primary_fetch_status = primary_res.status_code if primary_res else None
+        
+        # Preliminary parse for primary
+        primary_text = ""
+        if primary_html:
+            p_soup = BeautifulSoup(primary_html, "html.parser")
+            primary_text = _extract_body_text(p_soup)
+        
+        fetch_debug_log.append(f"Primary Fetch Outcome: {primary_reason}")
 
-        # ── Stage 2: sitemap discovery ──
-        sitemap_urls = _discover_sitemap_urls(url, headers)
-        if sitemap_urls:
-            console.print(f"   [green]Sitemap[/green]: Found {len(sitemap_urls)} URLs via sitemap.xml")
+        # C. ESCALATION DETECTION
+        should_escalate = False
+        if primary_fetch_status and _looks_blocked_response(primary_fetch_status, primary_html, primary_text):
+            should_escalate = True
+            fetch_debug_log.append(f"Escalation Triggered: Blocked/Challenge detected ({primary_fetch_status})")
+        elif _looks_thin_or_shell(primary_html, primary_text):
+            should_escalate = True
+            fetch_debug_log.append("Escalation Triggered: Thin content/JS-shell detected.")
+        elif primary_fetch_status is None or primary_fetch_status != 200:
+            should_escalate = True
+            fetch_debug_log.append(f"Escalation Triggered: Primary fetch problem ({primary_reason})")
 
-        # ── Primary fetch ──
-        response = None
-        for attempt in range(2):
-            try:
-                response = requests.get(url, headers=headers, timeout=10)
-                response.raise_for_status()
-                break
-            except Exception as e:
-                console.print(f"[yellow]Content Fetcher Node[/yellow]: Attempt {attempt + 1} failed: {e}")
-                if attempt == 1:
-                    console.print("[bold red]NODE_FAILED[/bold red]: Content Fetcher. Using fallbacks.")
-                    content_fetch_notes = f"Failed to fetch content: {str(e)}"
+        # D. SCRAPERAPI RESCUE
+        rendered_html = ""
+        if should_escalate:
+            scraperapi_used = True
+            rendered_html, s_reason = _scraperapi_fetch(url, locale_code)
+            fetch_debug_log.append(f"ScraperAPI Rescue Outcome: {s_reason}")
+            if rendered_html:
+                scraperapi_success = True
+                rendered_fetch_used = True
 
-        if response and response.status_code == 200:
-            try:
-                client_content_raw = response.text
-                soup = BeautifulSoup(client_content_raw, "html.parser")
+        # E. SOURCE SELECTION
+        rendered_text = ""
+        if rendered_html:
+            r_soup = BeautifulSoup(rendered_html, "html.parser")
+            rendered_text = _extract_body_text(r_soup)
+            
+        chosen_html, strategy, selection_note = _choose_best_html(primary_html, rendered_html, primary_text, rendered_text)
+        fetch_strategy_used = strategy
+        fetch_debug_log.append(f"Strategy Selected: {strategy} | {selection_note}")
+        
+        # F. FINAL PARSING (FROM CHOSEN SOURCE)
+        if not chosen_html or len(chosen_html.strip()) < 200:
+            fetch_debug_log.append("Hard failure: No usable HTML recovered after all attempts.")
+            state.update({
+                "audit_integrity_status": "invalid",
+                "audit_integrity_reasons": ["Site extraction failed: Zero or unusable HTML recovered."],
+                "source_of_truth_mode": "offsite_only",
+                "fetch_debug_log": fetch_debug_log
+            })
+            return state
 
-                # ── Homepage metadata (deterministic) ──
-                page_title = soup.title.string.strip() if soup.title and soup.title.string else ""
-                desc_tag = soup.find("meta", attrs={"name": "description"})
-                if desc_tag:
-                    meta_description = desc_tag.get("content", "").strip()
-                can_tag = soup.find("link", rel="canonical")
-                if can_tag:
-                    canonical_url = can_tag.get("href", "").strip()
-                hreflang_count = len(soup.find_all("link", hreflang=True))
+        final_soup = BeautifulSoup(chosen_html, "html.parser")
+        client_content_raw = chosen_html
+        client_content_clean = _extract_body_text(final_soup) 
+        word_count = len(client_content_clean.split())
+        
+        meta = _extract_metadata(final_soup)
+        _parse_schema_blocks(final_soup, json_ld_blocks, schema_type_counts)
+        found_address = _extract_business_address(final_soup, json_ld_blocks)
+        
+        # New: Semantic Signal Detection
+        signals = _detect_semantic_signals(final_soup, word_count, schema_counts=schema_type_counts)
+        
+        # G. INTEGRITY ASSESSMENT
+        reasons = []
+        source_of_truth = "hybrid" # default
 
-                # Stage 2: OG + Twitter from homepage
-                og_tags = _extract_og_tags(soup)
-                twitter_tags = _extract_twitter_tags(soup)
+        # Recalibrated Integrity Logic
+        has_rich_signals = signals["schema_signal_count"] >= 2 or signals["cta_count"] >= 2
+        
+        if word_count < 150:
+            if has_rich_signals:
+                integrity_status = "degraded"
+                reasons.append(f"Thin extraction ({word_count} words) but meaningful structured signals found.")
+            else:
+                integrity_status = "invalid"
+                source_of_truth = "offsite_only"
+                reasons.append(f"Critical data deficiency: Extracted word count ({word_count}) is below usable threshold.")
+        elif word_count < 400:
+            if signals["heading_count"] < 2 and not has_rich_signals:
+                integrity_status = "degraded"
+                reasons.append("Weak content structure (insufficient headings/signals).")
+            else:
+                integrity_status = "valid"
+        else:
+            integrity_status = "valid"
 
-                # Schema from homepage
-                _parse_schema_blocks(soup, json_ld_blocks, schema_type_counts)
+        if not client_content_clean.strip():
+            integrity_status = "invalid"
+            source_of_truth = "offsite_only"
+            reasons.append("No meaningful site-native text extracted.")
 
-                # ── Stage 2: build crawl queue (sitemap-first) ──
-                base_domain = urlparse(url).netloc
-                junk_keywords = [
-                    "cart", "login", "account", "checkout", "password",
-                    "search", "register", "?", "=", "logout", "wishlist"
-                ]
-                priority_keywords = [
-                    "category", "product", "blog", "about", "services",
-                    "chi-siamo", "storia", "collection", "editorial",
-                    "recipe", "contatti", "contact", "team", "menu"
-                ]
+        # Rescue reporting rule: 
+        final_note = f"Integrity: {integrity_status} | Strategy: {strategy}"
+        if strategy == "scraperapi_rendered" and primary_fetch_status in [403, 429]:
+            final_note = f"Primary fetch blocked ({primary_fetch_status}); ScraperAPI rendered fallback succeeded."
 
-                # Anchor-based discovery (homepage)
-                anchor_links = []
-                for a_tag in soup.find_all("a", href=True):
-                    link = urljoin(url, a_tag["href"])
-                    parsed = urlparse(link)
-                    if parsed.netloc != base_domain or link == url:
-                        continue
-                    if any(junk in link.lower() for junk in junk_keywords):
-                        continue
-                    if any(kw in link.lower() for kw in priority_keywords):
-                        anchor_links.insert(0, link)
-                    elif len(anchor_links) < 20:
-                        anchor_links.append(link)
+        state.update({
+            "client_content_raw": client_content_raw,
+            "client_content_clean": client_content_clean,
+            "client_content_depth": {
+                "word_count": word_count,
+                "extraction_quality": "high" if word_count > 600 else "medium" if word_count > 250 else "low",
+                "schema_block_count": len(json_ld_blocks),
+                "heading_count": signals["heading_count"],
+                "cta_count": signals["cta_count"],
+                "semantic_signals": signals
+            },
+            "fetch_strategy_used": fetch_strategy_used,
+            "primary_fetch_status": primary_fetch_status,
+            "scraperapi_used": scraperapi_used,
+            "scraperapi_success": scraperapi_success,
+            "rendered_fetch_used": rendered_fetch_used,
+            "fetch_debug_log": fetch_debug_log,
+            "audit_integrity_status": integrity_status,
+            "audit_integrity_reasons": reasons,
+            "source_of_truth_mode": source_of_truth,
+            "extracted_on_site_address": found_address,
+            "content_fetch_notes": final_note,
+            "page_title": meta["title"],
+            "meta_description": meta["description"],
+            "canonical_url": meta["canonical"],
+            "og_tags": meta["og"],
+            "twitter_tags": meta["twitter"],
+            "json_ld_blocks": json_ld_blocks,
+            "schema_type_counts": schema_type_counts
+        })
 
-                # Merge sitemap URLs (deduplicated, sitemap gets lower priority weight)
-                seen = {url}
-                internal_links = []
-                for link in anchor_links:
-                    if link not in seen:
-                        seen.add(link)
-                        internal_links.append(link)
+    except Exception as e:
+        fetch_debug_log.append(f"CRITICAL FETCH CRASH: {str(e)}")
+        state.update({
+            "audit_integrity_status": "invalid",
+            "audit_integrity_reasons": [f"Fetcher Node Crash: {str(e)}"],
+            "source_of_truth_mode": "offsite_only",
+            "fetch_debug_log": fetch_debug_log
+        })
 
-                for link in sitemap_urls:
-                    if link not in seen and not any(junk in link.lower() for junk in junk_keywords):
-                        seen.add(link)
-                        internal_links.append(link)
-
-                # Stage 2: up to 6 sub-pages (was 3)
-                pages_to_fetch = [url] + internal_links[:6]
-                fetched_page_urls = pages_to_fetch
-
-                # ── Multi-page fetch ──
-                merged_clean_text = ""
-                total_heading_count = 0
-                page_count = 0
-                js_heavy_signal_count = 0
-
-                for p_url in pages_to_fetch:
-                    try:
-                        console.print(f"   - Fetching: {p_url}")
-                        if p_url == url:
-                            p_response = response
-                        else:
-                            p_response = requests.get(p_url, headers=headers, timeout=8)
-
-                        if p_response.status_code != 200:
-                            continue
-
-                        page_count += 1
-                        p_soup = BeautifulSoup(p_response.text, "html.parser")
-
-                        # Schema from sub-pages
-                        if p_url != url:
-                            _parse_schema_blocks(p_soup, json_ld_blocks, schema_type_counts)
-
-                        total_heading_count += len(
-                            p_soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
-                        )
-
-                        # Stage 1: paragraph-level extraction
-                        # Remove non-content elements first
-                        for tag in p_soup(["script", "style", "noscript", "header",
-                                           "footer", "nav", "aside", "form"]):
-                            tag.decompose()
-
-                        clean_text = _extract_body_text(p_soup)
-                        p_word_count = len(clean_text.split())
-
-                        # Stage 1: JS heavy signal accumulation (was boolean inversion)
-                        if _is_js_heavy_page(p_word_count, len(p_response.text)):
-                            js_heavy_signal_count += 1
-
-                        merged_clean_text += " " + clean_text
-
-                    except Exception as loop_e:
-                        console.print(f"   [yellow]Warning[/yellow]: Failed to fetch {p_url}: {loop_e}")
-
-                # ── Stage 3: JS fallback via ScraperAPI ──
-                js_heavy_detected = js_heavy_signal_count >= 3
-                if js_heavy_detected:
-                    rendered_html = _js_fallback(url, headers)
-                    if rendered_html:
-                        r_soup = BeautifulSoup(rendered_html, "html.parser")
-                        for tag in r_soup(["script", "style", "noscript", "header",
-                                           "footer", "nav", "aside", "form"]):
-                            tag.decompose()
-                        fallback_text = _extract_body_text(r_soup)
-                        fallback_wc = len(fallback_text.split())
-                        current_wc = len(merged_clean_text.split())
-                        if fallback_wc > current_wc * 1.5:
-                            # Rendered version is meaningfully richer — use it
-                            merged_clean_text = fallback_text + " " + merged_clean_text
-                            js_fallback_used = True
-                            console.print(
-                                f"   [green]JS Fallback[/green]: Enriched from {current_wc} → {fallback_wc} words"
-                            )
-                        else:
-                            console.print("   [yellow]JS Fallback[/yellow]: Rendered content not richer. Discarded.")
-
-                client_content_clean = merged_clean_text.strip()
-                word_count = len(client_content_clean.split())
-
-                # ── Stage 1: tightened extraction_quality thresholds ──
-                # Require genuine content depth, not just raw volume.
-                # "high" requires both adequate word count AND multi-page coverage.
-                if word_count > 600 and page_count >= 3:
-                    extraction_quality = "high"
-                elif word_count > 250 or page_count >= 2:
-                    extraction_quality = "medium"
-                else:
-                    extraction_quality = "low"
-
-                client_content_depth = {
-                    "word_count": word_count,
-                    "page_count": page_count,
-                    "heading_count": total_heading_count,
-                    "js_heavy_detected": js_heavy_detected,
-                    "js_heavy_signal_count": js_heavy_signal_count,
-                    "extraction_quality": extraction_quality,
-                    "schema_block_count": len(json_ld_blocks)
-                }
-
-                if extraction_quality == "low" or js_heavy_detected:
-                    detail = " JS-heavy site detected." if js_heavy_detected else ""
-                    content_fetch_notes = (
-                        f"Warning: Content is thin or limited.{detail} Downstream confidence reduced."
-                    )
-                else:
-                    content_fetch_notes = (
-                        f"Content fetched from {page_count} pages successfully."
-                    )
-
-                console.print(
-                    f"[green]Content Fetcher Node[/green]: "
-                    f"Extracted {word_count} words across {page_count} pages | "
-                    f"Quality: {extraction_quality} | "
-                    f"JS-heavy signals: {js_heavy_signal_count}/{'7'} | "
-                    f"robots.txt: {robots_txt_status}"
-                )
-
-            except Exception as e:
-                console.print(f"[bold red]NODE_FAILED[/bold red]: Content Fetcher parse error: {e}")
-                content_fetch_notes = f"Parse error: {str(e)}"
-
-    # ── Assign to state (all existing keys + new keys) ──
-    # Existing keys (preserved, no renames)
-    state["client_content_raw"] = client_content_raw
-    state["client_content_clean"] = client_content_clean
-    state["client_content_depth"] = client_content_depth
-    state["content_fetch_notes"] = content_fetch_notes
-    state["page_title"] = page_title
-    state["meta_description"] = meta_description
-    state["canonical_url"] = canonical_url
-    state["hreflang_count"] = hreflang_count
-    state["json_ld_blocks"] = json_ld_blocks
-    state["schema_type_counts"] = schema_type_counts
-    state["fetched_page_urls"] = fetched_page_urls
-    state["multi_page_coverage_summary"] = f"Fetched {len(fetched_page_urls)} pages."
-
-    # New keys (Stage 2+3)
-    state["og_tags"] = og_tags
-    state["twitter_tags"] = twitter_tags
-    state["robots_txt_status"] = robots_txt_status
-    state["sitemap_urls"] = sitemap_urls
-    state["js_fallback_used"] = js_fallback_used
-
+    console.print(f"   [green]Content Fetcher Complete[/green] | Mode: {state.get('source_of_truth_mode')} | Word count: {state.get('client_content_depth', {}).get('word_count', 0)}")
     return state

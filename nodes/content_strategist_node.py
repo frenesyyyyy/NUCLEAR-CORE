@@ -127,24 +127,34 @@ def process(state: dict) -> dict:
 
     prompt = f"""
     You are a Senior GEO Content Auditor conducting an agency-grade audit.
+    Your goal is to convert extracted evidence into structured action opportunities.
 
     ## Collected Market Intelligence
     {grounding_context}
 
-    ## Target Website
+    ## Target Website Evidence
     URL: {url}
-    Evidence Summary: {evidence_summary}
-
-    ## Website Content (first 12000 chars)
+    Detected Schema: {json.dumps(schema_objects)}
+    Content Length: {len(client_content)} chars
+    
+    ## Primary Extraction (First 12,000 chars)
     {client_content[:12000]}
 
-    Using the market intelligence above as ground truth — not your training data —
-    identify what is missing, weak, or undifferentiated versus the competitor landscape.
+    Identify the specific gaps that prevent this brand from being the "authoritative answer" for the target industry in AI search engines (GEO).
+    
+    RULES FOR ACTION GENERATION:
+    1. Generate at least 2-3 specific "missing_page_types" (e.g., "Dental Implants Procedure Guide", "Insurance & Financing FAQ").
+    2. Identify at least 2 "discovery_intent_gaps" that convert general interest into specific actions.
+    3. Highlight MUST-HAVE "trust_signal_gaps" for the specific locale (e.g., P.IVA/PEC for Italy).
 
     Return STRICT JSON with exactly these keys:
-    "original_frameworks": list of proprietary methodologies or unique service names actually present on this site
-    "e_e_a_t_gaps": list of specific missing authority anchors grounded in the competitor/market data above
-    "recommended_content": list of 3-5 specific new pages or sections, each referencing a real gap from the market intelligence
+    "missing_page_types": list of [page_name, why_needed]
+    "trust_signal_gaps": list of [signal, evidence_basis]
+    "discovery_intent_gaps": list of [intent, suggestion]
+    "entity_trust_gaps": list of [entity, relation]
+    "local_visibility_gaps": list of [gap, fix]
+    "competitor_gap_opportunities": list of [competitor_strength, our_counter_strategy]
+    "original_frameworks": list of proprietary methodologies actually present on this site.
     """
     
     try:
@@ -165,23 +175,29 @@ def process(state: dict) -> dict:
             
         output = json.loads(clean_text.strip())
         
-        original_frameworks = output.get("original_frameworks", [])
-        e_e_a_t_gaps = output.get("e_e_a_t_gaps", [])
-        recommended_content = output.get("recommended_content", [])
+        # New Structured Output
+        state["missing_page_types"] = output.get("missing_page_types", [])
+        state["trust_signal_gaps"] = output.get("trust_signal_gaps", [])
+        state["discovery_intent_gaps"] = output.get("discovery_intent_gaps", [])
+        state["entity_trust_gaps"] = output.get("entity_trust_gaps", [])
+        state["local_visibility_gaps"] = output.get("local_visibility_gaps", [])
+        state["competitor_gap_opportunities"] = output.get("competitor_gap_opportunities", [])
         
-        console.print(f"[green]Content Strategist Node[/green]: Successfully extracted intelligence for {len(schema_objects)} schema types and mapped {len(e_e_a_t_gaps)} E-E-A-T gaps.")
+        # Legacy/Support Output
+        state["original_frameworks"] = output.get("original_frameworks", [])
+        state["e_e_a_t_gaps"] = [f"{g[0]}: {g[1]}" for g in output.get("trust_signal_gaps", [])] # for backward compat
+        state["recommended_content"] = [f"{p[0]} ({p[1]})" for p in output.get("missing_page_types", [])]
+        
+        console.print(f"[green]Content Strategist Node[/green]: Successfully mapped {len(state['trust_signal_gaps'])} trust gaps and {len(state['missing_page_types'])} page opportunities.")
     except Exception as e:
         console.print(f"[yellow]Content Strategist Node Failure: {e}[/yellow]")
         extraction_warnings.append(str(e))
 
-    # Safe additions to state (no overwriting existing required fields)
+    # Existing field support
     state["schema_objects"] = schema_objects
-    state["original_frameworks"] = original_frameworks
-    state["e_e_a_t_gaps"] = e_e_a_t_gaps
-    state["recommended_content"] = recommended_content
     state["structured_data_extract"] = structured_data_extract
     state["evidence_summary"] = evidence_summary
     state["extraction_warnings"] = extraction_warnings
-    state["grounding_context"] = _build_grounding_context(state)  # available to downstream nodes
+    state["grounding_context"] = grounding_context
     
     return state
