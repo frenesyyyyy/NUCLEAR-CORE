@@ -232,6 +232,22 @@ def process(state: dict) -> dict:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS audits (
+                run_id TEXT PRIMARY KEY,
+                started_at TEXT,
+                url TEXT,
+                locale TEXT,
+                target_industry TEXT,
+                metrics_json TEXT,
+                integrity_status TEXT,
+                integrity_score INTEGER,
+                overall_pipeline_readiness TEXT,
+                roi_verified INTEGER,
+                export_paths TEXT
+            )
+        ''')
+        
         cursor.execute("PRAGMA table_info(audits)")
         columns = [col[1] for col in cursor.fetchall()]
         

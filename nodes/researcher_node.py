@@ -575,6 +575,11 @@ def process(state: dict) -> dict:
     state["context_reliability"] = context_reliability
     state["confidence_integrity_cap"] = confidence_integrity_cap
     
+    # Degraded mode fallback defaults
+    visibility_score = 0
+    total_visibility = 0.0
+    authority_match_score = 0
+    
     gemini_key = os.getenv("GEMINI_API_KEY")
     perplexity_key = os.getenv("PERPLEXITY_API_KEY")
 

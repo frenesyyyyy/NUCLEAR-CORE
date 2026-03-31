@@ -5,3 +5,6 @@ geo_audit.db
 exports/
 __pycache__/
 *.pyc
+build/
+dist/
+tmp_*.py

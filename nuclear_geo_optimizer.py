@@ -14,6 +14,12 @@ def bootstrap_environment():
     """Create necessary directories and download resources."""
     console.print("[bold cyan]Nuclear AI GEO Optimizer v4.5 Agency-Grade[/bold cyan] - Bootstrapping environment...", style="cyan")
     
+    if getattr(sys, 'frozen', False):
+        exports_dir = os.path.abspath(os.path.join(os.path.dirname(sys.executable), "exports"))
+        console.print(f"[bold magenta][System][/bold magenta] Packaged runtime active. Executable: {sys.executable}")
+        console.print(f"[bold magenta][System][/bold magenta] Exports routing to: {exports_dir}")
+
+    
     # Create nodes/ folder if missing
     os.makedirs("nodes", exist_ok=True)
     

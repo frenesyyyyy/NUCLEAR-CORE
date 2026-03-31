@@ -18,10 +18,13 @@ def _calculate_share_of_model(stress_test_log: list[dict], tier_stats: dict = No
     total_pts = sum(q.get("max_pts", 0) for q in stress_test_log)
     earned_pts = sum(q.get("points", 0) for q in stress_test_log)
     
-    perplexity_share = (earned_pts / total_pts * 100) if total_pts > 0 else 0.0
+    if total_pts == 0 and not stress_test_log:
+        perplexity_share = "N/A (Extraction Failed)"
+    else:
+        perplexity_share = round((earned_pts / total_pts * 100) if total_pts > 0 else 0.0, 2)
     
     results = {
-        "Perplexity": round(perplexity_share, 2),
+        "Perplexity": perplexity_share,
         "tier_metrics": tier_stats or {}
     }
     
