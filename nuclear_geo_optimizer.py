@@ -44,6 +44,8 @@ def parse_args():
     parser.add_argument("--url", required=True, help="Target website URL")
     parser.add_argument("--locale", required=True, choices=["en", "it"], help="Locale (en or it)")
     parser.add_argument("--typo", "--type", choices=["tech", "food", "freelancer", "dentist"], default="tech", help="Business type for geo-targeting")
+    parser.add_argument("--runner", choices=["legacy", "hybrid"], default="legacy", help="Execution runner")
+    parser.add_argument("--run-mode", choices=["lite", "standard", "agency"], default="standard", help="Hybrid runner mode")
     args = parser.parse_args()
     return args
 
@@ -127,11 +129,19 @@ def main():
     bootstrap_environment()
     args = parse_args()
     state = initialize_state(args.url, args.locale, args.typo)
-    
-    console.print(f"Starting pipeline for URL: [bold yellow]{args.url}[/bold yellow] | Locale: [bold yellow]{args.locale}[/bold yellow]")
-    
-    final_state = run_pipeline(state)
-    
+
+    console.print(
+        f"Starting pipeline for URL: [bold yellow]{args.url}[/bold yellow] | "
+        f"Locale: [bold yellow]{args.locale}[/bold yellow] | "
+        f"Runner: [bold yellow]{args.runner}[/bold yellow]"
+    )
+
+    if args.runner == "legacy":
+        final_state = run_pipeline(state)
+    else:
+        from nodes.execution_manager import run_hybrid_pipeline
+        final_state = run_hybrid_pipeline(state, run_mode=args.run_mode)
+
     console.print(f"[bold cyan]Pipeline execution finished. Status: {final_state.get('status', 'Completed')}[/bold cyan]")
 
 if __name__ == "__main__":
