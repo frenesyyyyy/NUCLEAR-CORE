@@ -68,9 +68,12 @@ def _compute_data_confidence(state: dict) -> int:
     if len(schema_counts) > 3: score += 30
     elif len(schema_counts) > 0: score += 15
     
-    # Hard credibility cap
-    if citations <= 1:
-        score = min(score, 45)
+    # Hard credibility cap (Profile-aware gaps instead of universal citation floors)
+    penalized_gaps = taxonomy.get("penalized_relevant_gaps", [])
+    if len(penalized_gaps) >= 2:
+        score = min(score, 50) # Multiple critical profile-specific gaps limit confidence
+    elif citations <= 1 and len(penalized_gaps) > 0:
+        score = min(score, 45) # Absolute citation failure matching a profile gap
     
     if depth.get("word_count", 0) < 200:
         score = min(score, 50)
@@ -93,14 +96,20 @@ def _compute_verdict(state: dict) -> tuple[str, str]:
     ed = metrics.get("Defensible Evidence Depth", 0)
     vc = metrics.get("Entity Consensus", 0)
 
-    # Hard Invalid/Degraded Rules
     if source_mode == "offsite_only" or integrity_status == "invalid":
         return "NOT CLIENT READY", "Site extraction failed/blocked. Findings are unverified off-site inferences only."
     
     if blind_hit_rate == 0 and contextual_hit_rate == 0:
         return "NOT CLIENT READY", "Brand has absolute zero discovery visibility. Fundamental positioning failure."
 
-    if ed < 30 or vc < 30:
+    PLATFORM_PROFILES = {"marketplace", "consumer_saas", "ecommerce_brand"}
+    profile_key = state.get("business_profile_key", "b2b_saas")
+    
+    # Profile-aware requirement thresholds
+    min_evidence_depth = 20 if profile_key in PLATFORM_PROFILES else 30
+    min_visibility_consensus = 30 # Consensus always requires market agreement regardless of profile
+
+    if ed < min_evidence_depth or vc < min_visibility_consensus:
         return "REQUIRES ANALYST REVIEW", "Visibility or Evidence metrics are too weak to support a confident automated strategy."
     
     if integrity_status == "degraded":
@@ -151,7 +160,11 @@ def process(state: dict) -> dict:
     depth = state.get("client_content_depth", {})
     state["evidence_confidence"] = "High" if depth.get("extraction_quality", "Failed") == "high" else "Low"
     taxonomy = state.get("source_taxonomy", {})
-    state["trust_confidence"] = "High" if (taxonomy.get("owned_count", 0) + taxonomy.get("earned_count", 0)) > 5 else "Low"
+    
+    # Trust confidence is governed by relevant gaps rather than arbitrary citation volumes
+    has_critical_gaps = len(taxonomy.get("penalized_relevant_gaps", [])) > 0
+    state["trust_confidence"] = "High" if (taxonomy.get("earned_count", 0) > 2 and not has_critical_gaps) else "Low"
+    
     state["schema_confidence"] = "High" if len(state.get("schema_type_counts", {})) > 2 else "Low"
     
     verdict, reason = _compute_verdict(state)

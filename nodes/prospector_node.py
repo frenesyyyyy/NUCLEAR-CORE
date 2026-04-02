@@ -166,6 +166,14 @@ def _corroborate_location(state: dict, val_data: dict, serper_results: list) -> 
 def process(state: dict) -> dict:
     console.print("[cyan]Prospector Node[/cyan]: Starting single-call Agency-Grade GEO search...")
 
+    # SAFE NORMALIZE LIST OBJECTS TO PREVENT ATTRIBUTE ERROR
+    raw_payload = state.get("client_content_raw", "")
+    if isinstance(raw_payload, list):
+        normalized = " ".join([str(p.get("html", "")).lower() for p in raw_payload if isinstance(p, dict)])
+        state["client_content_raw"] = normalized
+    elif isinstance(raw_payload, str):
+        state["client_content_raw"] = raw_payload.lower()
+
     # Fallbacks and default schema strictly defined
     raw_data_complete = {
         "perplexity_summary": "",
@@ -190,9 +198,9 @@ def process(state: dict) -> dict:
     source_mode = state.get("source_of_truth_mode", "hybrid")
     
     serper_api_key = os.getenv("SERPER_API_KEY")
-    perplexity_api_key = os.getenv("PERPLEXITY_API_KEY")
+    gemini_key = os.getenv("GEMINI_API_KEY")
     
-    if not serper_api_key or not perplexity_api_key:
+    if not serper_api_key or not gemini_key:
         console.print("[bold red]NODE_FAILED[/bold red]: Prospector (API Keys missing). Using fallbacks.")
         state["raw_data_complete"] = raw_data_complete
         state["external_sources"] = external_sources
@@ -251,37 +259,98 @@ def process(state: dict) -> dict:
     else:
         serper_query = f"top {target_industry} in {discovered_location}" if is_local_candidate else f"top {target_industry} industry leaders"
 
-    def is_valid_result(res, is_platform_context):
+    def generate_external_source_queries(b_name, p_key, b_locale):
+        if p_key == "marketplace":
+            return [
+                f"{b_name} app store",
+                f"{b_name} google play",
+                f"{b_name} recensioni",
+                f"{b_name} trustpilot",
+                f"{b_name} news",
+                f"{b_name} wikipedia",
+                f"{b_name} rider recensioni",
+                f"{b_name} partner ristoranti"
+            ]
+        elif p_key in ("b2b_saas", "consumer_saas", "local_tech_provider"):
+            return [
+                f"{b_name} g2",
+                f"{b_name} capterra",
+                f"{b_name} review",
+                f"{b_name} product hunt",
+                f"{b_name} integrations",
+                f"{b_name} github"
+            ]
+        elif p_key in ("local_law_firm", "local_dentist", "freelancer_consultant", "general_local_business", "restaurant_hospitality"):
+            return [
+                f"{b_name} recensioni",
+                f"{b_name} google maps",
+                f"{b_name} opinioni",
+                f"{b_name} dove si trova"
+            ]
+        else:
+            return [
+                f"{b_name} recensioni",
+                f"{b_name} wikipedia",
+                f"{b_name} news"
+            ]
+
+    brand_for_query = state.get("brand_name", "")
+    profile_for_query = state.get("business_profile_key", "unknown")
+    external_queries = generate_external_source_queries(brand_for_query, profile_for_query, locale)
+    all_queries = [serper_query] + external_queries[:5]
+
+    def is_valid_result(res, is_platform_context, is_external_query=False):
         link = res.get("link", "").lower()
         title = res.get("title", "").lower()
         soft_exclusions = ['tripadvisor', 'yelp', 'booking', 'expedia', 'thefork', 'justeat', 'deliveroo', 'glovo', 'ubereats', 'airbnb']
         hard_exclusions = ['amazon', 'trustpilot', 'facebook', 'instagram', 'linkedin', 'github', 'youtube']
-        if any(d in link for d in hard_exclusions): return False
-        if not is_platform_context:
+        
+        # If we are explicitly searching for external ecosystems, we WANT trustpilot, github, etc.
+        if not is_external_query and any(d in link for d in hard_exclusions): return False
+        
+        if not is_platform_context and not is_external_query:
             if any(d in link for d in soft_exclusions): return False
             if "directory" in title or "top 10" in title: return False
         return True
 
     s_results = []
-    for attempt in range(2):
-        s_results = call_serper(serper_query, str(serper_api_key))
-        if s_results:
-            seen_domains = set()
-            filtered_results = []
-            for r in s_results:
-                if is_valid_result(r, is_platform_context):
-                    domain_match = re.search(r'https?://(?:www\.)?([^/]+)', r.get("link", ""))
-                    d = domain_match.group(1).lower() if domain_match else r.get("link", "")
-                    if d not in seen_domains:
-                        seen_domains.add(d)
-                        filtered_results.append(r)
-            s_results = filtered_results
-            raw_data_complete["serper_results"] = filtered_results
-            external_sources = [r.get("link") for r in filtered_results if r.get("link")]
-            external_data_quality = "high" if len(filtered_results) >= 5 else "medium"
-            break
-        else:
-            time.sleep(2)
+    seen_domains = set()
+    filtered_results = []
+
+    for q_idx, q in enumerate(all_queries):
+        is_ext_query = (q_idx > 0)
+        for attempt in range(2):
+            res_chunk = call_serper(q, str(serper_api_key))
+            if res_chunk:
+                for r in res_chunk:
+                    if is_valid_result(r, is_platform_context, is_external_query=is_ext_query):
+                        domain_match = re.search(r'https?://(?:www\.)?([^/]+)', r.get("link", ""))
+                        d = domain_match.group(1).lower() if domain_match else r.get("link", "")
+                        if d not in seen_domains:
+                            seen_domains.add(d)
+                            filtered_results.append(r)
+                            s_results.append(r)
+                break
+            else:
+                time.sleep(1)
+
+    if filtered_results:
+        raw_data_complete["serper_results"] = filtered_results
+        external_sources_raw = [
+            {
+                "url": r.get("link"),
+                "title": r.get("title"),
+                "snippet": r.get("snippet")
+            }
+            for r in filtered_results if r.get("link")
+        ]
+        state["external_sources_raw"] = external_sources_raw
+        external_sources = [r.get("link") for r in filtered_results if r.get("link")]
+        external_data_quality = "high" if len(filtered_results) >= 5 else "medium"
+    else:
+        external_data_quality = "low"
+        external_sources = []
+        state["external_sources_raw"] = []
 
     # --- GEO CORROBORATION (CRITICAL PATCH) ---
     final_loc, loc_conf, geo_mode, geo_ev = _corroborate_location(state, val_data, s_results)
@@ -310,7 +379,28 @@ def process(state: dict) -> dict:
     """
 
     console.print(f"Executing Tier-1 Intelligence Retrieval (Geo: {final_loc} | Conf: {loc_conf})...")
-    raw_intelligence = call_perplexity(system_role, agency_query, str(perplexity_api_key))
+    
+    # LEGACY PATH: Perplexity implementation retained intentionally for optional future reactivation.
+    # raw_intelligence = call_perplexity(system_role, agency_query, str(perplexity_api_key))
+    
+    # ACTIVE PATH: Serper + Gemini 2.5 Flash Lite
+    try:
+        gemini_client = genai.Client(api_key=gemini_key)
+        serper_context = json.dumps([{"title": r.get("title"), "snippet": r.get("snippet")} for r in s_results])
+        
+        full_query = f"{system_role}\n\n{agency_query}\n\nContext from live search:\n{serper_context}"
+        
+        def _intel_req():
+            return gemini_client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=full_query,
+                config={"response_mime_type": "application/json"}
+            )
+        res = execute_with_backoff(_intel_req, max_retries=3, initial_delay=3.0)
+        raw_intelligence = res.text
+    except Exception as e:
+        console.print(f"[yellow]Gemini Intelligence Error[/yellow]: {e}")
+        raw_intelligence = "{}"
     
     try:
         match = re.search(r'```(?:json)?(.*?)```', raw_intelligence, re.DOTALL | re.IGNORECASE)

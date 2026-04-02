@@ -371,7 +371,7 @@ def _brand_mentioned(brand_name: str, url: str, og_title: str, answer_text: str,
 
 def _run_stress_test(
     all_queries: list,
-    perplexity_key: str,
+    serper_key: str,
     brand_name: str,
     url: str,
     og_title: str,
@@ -409,24 +409,49 @@ def _run_stress_test(
 
         matched = False
         try:
-            payload = {
-                "model": "sonar-pro",
-                "messages": [
-                    {"role": "system", "content": "You are a helpful search assistant."},
-                    {"role": "user",   "content": q_text}
-                ]
-            }
-            def _perp_req():
-                response = requests.post(
-                    "https://api.perplexity.ai/chat/completions",
-                    json=payload,
-                    headers={"Authorization": f"Bearer {perplexity_key}"},
-                    timeout=30
+            # LEGACY PATH: Perplexity implementation retained intentionally for optional future reactivation.
+            # payload = {
+            #     "model": "sonar-pro",
+            #     "messages": [
+            #         {"role": "system", "content": "You are a helpful search assistant."},
+            #         {"role": "user",   "content": q_text}
+            #     ]
+            # }
+            # def _perp_req():
+            #     response = requests.post(
+            #         "https://api.perplexity.ai/chat/completions",
+            #         json=payload,
+            #         headers={"Authorization": f"Bearer {os.getenv('PERPLEXITY_API_KEY', 'legacy_key')}"},
+            #         timeout=30
+            #     )
+            #     response.raise_for_status()
+            #     return response.json()["choices"][0]["message"]["content"]
+            #
+            # answer = execute_with_backoff(_perp_req, max_retries=3, initial_delay=3.0)
+            
+            # ACTIVE PATH: Serper + Gemini 2.5 Flash Lite
+            def _search_and_reason():
+                # 1. Retrieval
+                s_url = "https://google.serper.dev/search"
+                s_payload = json.dumps({"q": q_text, "num": 10})
+                s_headers = {'X-API-KEY': serper_key, 'Content-Type': 'application/json'}
+                s_res = requests.post(s_url, headers=s_headers, data=s_payload, timeout=15)
+                s_res.raise_for_status()
+                s_data = s_res.json().get("organic", [])
+                
+                context = json.dumps([{"title": r.get("title"), "snippet": r.get("snippet")} for r in s_data[:8]])
+                
+                # 2. Reasoning
+                prompt = f"Based on these search results for the query '{q_text}', summarize the top recommendations and specific brands/solutions mentioned in the snippets. Provide a direct, factual answer.\n\nSearch context:\n{context}"
+                
+                res = gemini_client.models.generate_content(
+                    model="gemini-2.5-flash-lite",
+                    contents=prompt
                 )
-                response.raise_for_status()
-                return response.json()["choices"][0]["message"]["content"]
-
-            answer = execute_with_backoff(_perp_req, max_retries=3, initial_delay=3.0)
+                return res.text
+            
+            answer = execute_with_backoff(_search_and_reason, max_retries=3, initial_delay=3.0)
+            
             matched = _brand_mentioned(brand_name, url, og_title, answer, gemini_client)
             if matched:
                 visibility_points += pts
@@ -581,9 +606,9 @@ def process(state: dict) -> dict:
     authority_match_score = 0
     
     gemini_key = os.getenv("GEMINI_API_KEY")
-    perplexity_key = os.getenv("PERPLEXITY_API_KEY")
+    serper_key = os.getenv("SERPER_API_KEY")
 
-    if not gemini_key or not perplexity_key:
+    if not gemini_key or not serper_key:
         console.print("[bold red]NODE_FAILED[/bold red]: Researcher (API Keys missing). Using fallbacks.")
         state["metrics"] = metrics
         return state
@@ -683,26 +708,30 @@ def process(state: dict) -> dict:
         t2_fallback_count = 0
 
         # BACKFILL Logic (Agency-Grade)
-        def _get_fallback_queries(type_key, profile, loc, locale_code, budget_limit, existing_count):
+        def _get_fallback_queries(type_key, profile, loc, loc_conf, locale_code, budget_limit, existing_count):
             fallback_map = profile.get(f"{type_key}_fallback_templates", {})
             templates = fallback_map.get(locale_code, fallback_map.get("en", []))
             needed = budget_limit - existing_count
             added = []
             if needed > 0 and templates:
                 for t in templates[:needed]:
-                    q_text = _inject_geo_context(t, loc, locale_code) if is_local else t
+                    # Only inject geo if confidence is high/medium and locality is valid
+                    if is_local and loc_conf in ["high", "medium"] and str(loc).lower() not in ["none", "unknown", "worldwide", "national"]:
+                        q_text = _inject_geo_context(t, loc, locale_code)
+                    else:
+                        q_text = t
                     added.append({"query": q_text, "tier": f"{type_key}_discovery", "points": 25 if type_key == "blind" else 15})
             return added
 
         if len(t1_queries) < 3:
             console.print("      [yellow]T1 Integrity Guard: Backfilling realistic profile templates.[/yellow]")
-            added = _get_fallback_queries("blind", state.get("business_profile", {}), discovered_location, locale, 5, len(t1_queries))
+            added = _get_fallback_queries("blind", state.get("business_profile", {}), discovered_location, loc_conf, locale, 5, len(t1_queries))
             t1_queries.extend(added)
             t1_fallback_count = len(added)
 
         if len(t2_queries) < 3:
             console.print("      [yellow]T2 Integrity Guard: Backfilling realistic profile templates.[/yellow]")
-            added = _get_fallback_queries("contextual", state.get("business_profile", {}), discovered_location, locale, 5, len(t2_queries))
+            added = _get_fallback_queries("contextual", state.get("business_profile", {}), discovered_location, loc_conf, locale, 5, len(t2_queries))
             t2_queries.extend(added)
             t2_fallback_count = len(added)
 
@@ -728,7 +757,7 @@ def process(state: dict) -> dict:
         }
         
         visibility_points, total_possible, stress_test_log, tier_stats = _run_stress_test(
-            all_queries, str(perplexity_key), brand_name, url, og_title_st, gemini_client_st
+            all_queries, str(serper_key), brand_name, url, og_title_st, gemini_client_st
         )
 
         visibility_score = min(100, int((visibility_points / max(total_possible, 1)) * 100))

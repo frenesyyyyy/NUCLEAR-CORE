@@ -1,0 +1,78 @@
+# Data Flow Inconsistency Fix
+
+## 1. Root Cause Diagnosis
+The inconsistency arises from a disjoint in what dataset each node reads to compute its source metrics:
+- `earned_media_node.py` merges `state["external_sources_raw"]` (which contains ~5 structured URLs directly from the `prospector_node` Serper search) **with** `state["raw_data_complete"]["source_urls"]` (which contains the full list of external URLs, usually ~30+, gathered throughout the entire pipeline). It calculates its `Sources: 31` from this combined dataset.
+- `source_quality_node.py` was recently patched to **only** read `state["external_sources_raw"]`. As a result, it ignores the larger pool of citations found in `raw_data_complete`, calculating a footprint from only a tiny subset (or 0 if Serper rate limits dropped the array).
+- `finalizer_node.py` reads exclusively from the output of `source_quality_node.py` (`source_taxonomy` bucket counts). Because `source_quality_node.py` evaluates zero or very few URLs, Finalizer strictly reports "0 citations found" and "No external sources discovered."
+
+## 2. Exact Files to Change
+- **`nodes/earned_media_node.py`**: Stop it from maintaining a rogue `all_source_urls` un-canonical mapping.
+- **`nodes/source_quality_node.py`**: Update it to read and merge the exact same canonical URL sets, classify them, and export a master unified `source_taxonomy`.
+- **`nodes/finalizer_node.py`**: Remove blind legacy calculations and map the Markdown export directly to the unified `source_taxonomy`.
+- **`nodes/node_contracts.py`**: Ensure `external_sources_raw` flows cleanly if necessary (already done).
+
+## 3. Exact Contradictory Fields & Computation Origins
+| Field | Node / Origin | What it calculates |
+|---|---|---|
+| **"Sources: 31"** | `earned_media` | Counts `len(all_source_urls)` which is explicitly merged from `external_sources_raw` + `raw_data_complete["source_urls"]`. |
+| **"Total Sources: 0"** | `source_quality` | Counts `sum(legacy_buckets)` looping **only** over `external_sources_raw`, dropping all other pipeline citations. |
+| **"Citations Found: Owned (0)..."** | `finalizer` | Reads `owned_count` blindly from `state["source_taxonomy"]` output by `source_quality_node`. |
+| **"Trust Mix: No external sources"** | `finalizer` | Reads `trust_mix_summary` from `state["source_taxonomy"]` output by `source_quality_node`. |
+
+## 4. Exact Canonical Source Structure
+To guarantee mathematically impossible contradictions don't occur, **all nodes must operate on**:
+We will unify creation of `all_source_urls` inside `source_quality_node.py` by aggregating:
+1. `external_sources_raw` (Structured URLs from Serper prospector).
+2. `raw_data_complete["source_urls"]` (Additional scraped/provided URLs).
+
+We will create a single, definitive exported block passed to `Finalizer`:
+```python
+state["source_taxonomy"] = {
+    # Absolute counts
+    "total_external_sources": total_sources,
+    "owned_count": owned_count,
+    "earned_count": earned_count,
+    "forum_count": forum_count,
+    "review_count": review_count,
+    "directory_count": directory_count,
+    "unknown_count": unknown_count,
+
+    # Synthesized insights
+    "trust_mix_summary": trust_mix_summary,
+    ...
+}
+```
+
+## 5. Exact Minimal Code Changes
+
+### A. Unify URL Aggregation (`nodes/source_quality_node.py`)
+```python
+    raw_data = state.get("raw_data_complete", {})
+    external_sources_raw = state.get("external_sources_raw", [])
+    
+    all_source_urls = []
+    
+    # Extract URLs from prospector structured data
+    for s in external_sources_raw:
+        s_url = s.get("url")
+        if s_url and s_url not in all_source_urls:
+            all_source_urls.append(s_url)
+            
+    # Extract URLs from broader pipeline scrape/telemetry
+    for s_url in raw_data.get("source_urls", []):
+        if s_url and s_url not in all_source_urls:
+            all_source_urls.append(s_url)
+
+    print(f"[DEBUG] Source Quality aggregated {len(all_source_urls)} canonical URLs")
+```
+We then loop over strictly `all_source_urls` to generate `owned_count`, etc.
+
+### B. Make Earned Media Match (`nodes/earned_media_node.py`)
+Instead of duplicating the merging logic, `earned_media_node.py` will use exactly the same aggregation logic at the top of its file so its prints and internal evaluations match verbatim.
+
+### C. First-Party Independence
+First-party inference tags (`al:ios:app_store_id`, `diventa partner`, etc.) will logically suppress gap warnings via `gap_check_breakdown` but will definitively NOT append `+1` to `review_count` or list strings out to `Citations Found`, completely halting hallucinated footprint stats.
+
+## User Action Required
+Please approve this logic block mapping so that `Source Quality` formally commands the single canonical aggregation of actual web indexes, preventing the 31 vs 0 node divergence.

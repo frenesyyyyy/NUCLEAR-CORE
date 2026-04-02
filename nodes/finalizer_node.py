@@ -56,7 +56,7 @@ def _render_earned_media_section(earned_media: dict, taxonomy: dict) -> str:
     
     if taxonomy:
         md += f"- **Trust Mix Summary:** {taxonomy.get('trust_mix_summary', 'N/A')}\n"
-        md += f"- **Citations Found:** Owned ({taxonomy.get('owned_count', 0)}), Earned ({taxonomy.get('earned_count', 0)}), Review ({taxonomy.get('review_count', 0)}), Forum ({taxonomy.get('forum_count', 0)})\n"
+        md += f"- **Citations Found:** Owned ({taxonomy.get('owned_count', 0)}), Earned ({taxonomy.get('earned_count', 0)}), Review ({taxonomy.get('review_count', 0)}), Forum ({taxonomy.get('forum_count', 0)}), Directory ({taxonomy.get('directory_count', 0)})\n"
         risk = taxonomy.get("citation_source_risk", "") # This is a list in refined model, but handled as str/list
         if risk:
             if isinstance(risk, list): risk = ", ".join(risk)
@@ -117,9 +117,9 @@ def _render_model_analytics_section(analytics: dict) -> str:
              md += "> **VISIBILITY GAP ALERT**: Brand is recognized when named directly, but remains largely absent from true discovery queries.\n"
 
     risks = analytics.get("engine_specific_risks", {})
-    if risks.get("Perplexity"):
+    if risks.get("Live AI Search"):
         md += "\n### Engine specific risks:\n"
-        for r in risks["Perplexity"][:2]:
+        for r in risks["Live AI Search"][:2]:
             md += f"- {r}\n"
             
     md += "\n---\n\n"

@@ -8,3 +8,4 @@ streamlit
 python-dotenv
 rich
 nltk
+playwright

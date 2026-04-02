@@ -2,14 +2,27 @@
 Source Quality Node — GEO Optimizer Pipeline.
 
 Aggregates earned media buckets into a definitive source taxonomy,
-computes a text-based trust mix summary, and evaluates citation
+computes a profile-aware trust mix summary, and evaluates citation
 source risk based on the business profile context.
+
+v4.5 Authority Upgrade: Now uses profile-aware source family breakdown
+from source_matrix.py to generate contextual gap analysis, eliminating
+false universal penalties for missing irrelevant source types.
 
 All logic is deterministic; no external API calls.
 """
 
 from typing import Any
 from rich.console import Console
+from nodes.source_matrix import (
+    get_source_pack,
+    get_missing_relevant_sources,
+    get_irrelevant_ignored,
+    check_trust_anchor_presence,
+    classify_url_to_family,
+    get_canonical_source_urls
+)
+from nodes.earned_media_node import _FAMILY_TO_LEGACY_BUCKET
 
 console = Console()
 
@@ -21,9 +34,12 @@ def _evaluate_trust_mix(
     review_count: int,
     directory_count: int,
     total_sources: int,
+    profile_key: str = "b2b_saas",
+    family_breakdown: dict = None,
+    source_pack: dict = None,
 ) -> str:
     """
-    Generate a text-based summary of the brand's off-site trust mix.
+    Generate a profile-aware text summary of the brand's off-site trust mix.
     """
     if total_sources == 0:
         return "No external sources discovered. Trust mix is severely lacking."
@@ -31,6 +47,27 @@ def _evaluate_trust_mix(
     if owned_count == total_sources:
         return "Echo chamber detected. All discovered sources are owned properties. No independent validation."
 
+    # Profile-aware: check relevant family coverage
+    if family_breakdown and source_pack:
+        relevant_families = source_pack.get("relevant_families", [])
+        irrelevant = set(source_pack.get("irrelevant_families", []))
+        relevant_count = sum(
+            family_breakdown.get(f, 0)
+            for f in relevant_families
+            if f not in irrelevant
+        )
+
+        ratio = (relevant_count / total_sources) * 100 if total_sources > 0 else 0
+        profile_label = source_pack.get("label", profile_key)
+
+        if ratio >= 50:
+            return f"Strong independent validation for '{profile_label}'. Majority of sources are from relevant authority families for this vertical."
+        elif ratio >= 20:
+            return f"Moderate independent validation for '{profile_label}'. Some relevant source family presence, but coverage gaps remain."
+        else:
+            return f"Weak independent validation for '{profile_label}'. Detected sources are mostly low-priority for this vertical."
+
+    # Legacy fallback (no family data)
     high_trust = earned_count + review_count
     ratio = (high_trust / total_sources) * 100
 
@@ -49,32 +86,38 @@ def _evaluate_citation_risk(
     directory_count: int,
     total_sources: int,
     profile_key: str,
+    missing_relevant: list = None,
 ) -> list[str]:
     """
     Evaluate specific citation risks based on the business profile.
+    v4.5: Uses profile-aware missing source gaps instead of universal platform checks.
     """
     risks = []
-    
+
     if total_sources == 0:
         risks.append("CRITICAL: Zero external footprint. AI engines have no independent context for this brand.")
         return risks
 
-    # B2B SaaS, Ecommerce, Apps — high reliance on reviews
+    # Profile-aware risk from missing relevant sources
+    if missing_relevant:
+        for gap in missing_relevant:
+            risks.append(f"Source Gap: {gap}")
+        return risks
+
+    # Legacy fallback risk logic (if source_matrix data not available)
     if profile_key in ("b2b_saas", "consumer_saas", "ecommerce_brand", "marketplace"):
         if review_count == 0:
             risks.append("Missing validation: No review platform mentions (G2, Trustpilot, App Store). High risk of exclusion from comparison queries.")
-    
-    # Media/Education/Agency — high reliance on editorial
+
     elif profile_key in ("media_blog", "education_course_provider", "agency_marketing"):
         if earned_count == 0:
             risks.append("Authority gap: No editorial/press mentions. High risk for 'best in class' or thought-leadership queries.")
-    
-    # Local services — reputation proxies
+
     elif profile_key in ("local_dentist", "local_law_firm", "restaurant_hospitality", "local_tech_provider", "freelancer_consultant"):
         if review_count == 0 and directory_count == 0:
             risks.append("Local ghost: No local directory or review citations detected. High risk for 'near me' discovery.")
         elif review_count == 0:
-            risks.append("Incomplete footprint: Discovered on directories but missing on high-trust review platforms (MioDottore, Yelp, Tripadvisor).")
+            risks.append("Incomplete footprint: Discovered on directories but missing on high-trust review platforms relevant to this vertical.")
 
     # General risks
     if (earned_count + review_count) == 0 and total_sources > 0:
@@ -88,33 +131,89 @@ def process(state: dict) -> dict:
     """
     Create a source taxonomy and trust-mix summary.
 
-    Args:
-        state: Pipeline state dictionary.
-
-    Returns:
-        Updated state with ``state["source_taxonomy"]``.
+    v4.5: Extended with profile-aware family gap analysis, trust anchor detection,
+    and irrelevant-source filtering. All existing keys preserved.
     """
-    console.print("[bold blue]Node: Source Quality[/bold blue] | Building source taxonomy and trust mix...")
+    console.print("[bold blue]Node: Source Quality[/bold blue] | Building profile-aware source taxonomy and trust mix...")
 
     earned_media: dict  = state.get("earned_media", {})
     profile: dict       = state.get("business_profile", {})
     profile_key: str    = state.get("business_profile_key", "b2b_saas")
+
+    # ── NEW: Profile-aware source pack data ───────────────────────────────────
+    source_pack = get_source_pack(profile_key)
     
-    # Extract buckets from earned media node
-    breakdown = earned_media.get("source_breakdown", {})
+    # ── FIXED: Parse structured URLs directly to guarantee LLM-free metrics ──
+    owned_count = 0
+    earned_count = 0
+    forum_count = 0
+    review_count = 0
+    directory_count = 0
+    unknown_count = 0
+
+    brand_domain = state.get("url", "").replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
     
-    owned_count     = breakdown.get("owned", 0)
-    earned_count    = breakdown.get("editorial", 0)
-    forum_count     = breakdown.get("forum", 0)
-    review_count    = breakdown.get("review", 0)
-    directory_count = breakdown.get("directory", 0)
-    unknown_count   = breakdown.get("unknown", 0)
+    family_breakdown: dict = {f: 0 for f, _ in _FAMILY_TO_LEGACY_BUCKET.items()}
+    
+    # Process canonically aggregated structured sources
+    all_source_urls = get_canonical_source_urls(state)
+    print(f"[DEBUG] Source Quality aggregated {len(all_source_urls)} canonical URLs")
+    
+    for url in all_source_urls:
+        if not url:
+            continue
+            
+        family, _ = classify_url_to_family(url, brand_domain)
+        family_breakdown[family] = family_breakdown.get(family, 0) + 1
+        
+        legacy_bucket = _FAMILY_TO_LEGACY_BUCKET.get(family, "unknown")
+        if legacy_bucket == "owned": owned_count += 1
+        elif legacy_bucket == "editorial": earned_count += 1
+        elif legacy_bucket == "forum": forum_count += 1
+        elif legacy_bucket == "review": review_count += 1
+        elif legacy_bucket == "directory": directory_count += 1
+        else: unknown_count += 1
 
     total_sources = sum([
-        owned_count, earned_count, forum_count, 
+        owned_count, earned_count, forum_count,
         review_count, directory_count, unknown_count
     ])
 
+    first_party_inferred: list = earned_media.get("first_party_inferred_families", [])
+
+    # ── FIXED: First-Party App & Ecosystem Inference ──
+    client_content = str(state.get("client_content_clean", state.get("client_content_raw", ""))).lower()
+    og_tags = state.get("og_tags", {})
+    og_text = str(og_tags).lower()
+    full_text = client_content + " " + og_text
+
+    first_party_app_detected = any(k in full_text for k in ["al:ios:app_store_id", "al:android:package", "app store", "google play"])
+    first_party_partner_detected = any(k in full_text for k in ["diventa partner", "rider", "lavora con noi", "diventa nostro partner", "consegna con noi", "become a partner", "delivery partner"])
+
+    if profile_key == "marketplace":
+        if first_party_app_detected:
+            first_party_inferred.append({"family": "app_ecosystems", "tag": "first_party"})
+            
+        if first_party_partner_detected:
+            first_party_inferred.append({"family": "marketplace_partner_ecosystems", "tag": "first_party"})
+
+    # Derive set of families confirmed only by first-party inference (not external)
+    inferred_family_names: set = {i["family"] for i in first_party_inferred if isinstance(i, dict)}
+
+    # Missing relevant sources (profile-contextual gaps only)
+    gap_check_breakdown = family_breakdown.copy()
+    for f in inferred_family_names:
+        gap_check_breakdown[f] = 1
+
+    missing_relevant = get_missing_relevant_sources(gap_check_breakdown, source_pack)
+
+    # Irrelevant families that were intentionally skipped
+    irrelevant_ignored = get_irrelevant_ignored(source_pack)
+
+    # Trust anchor presence check
+    trust_anchors_found = check_trust_anchor_presence(all_source_urls, source_pack)
+
+    # ── Trust mix summary (profile-aware) ─────────────────────────────────────
     trust_mix_summary = _evaluate_trust_mix(
         earned_count=earned_count,
         owned_count=owned_count,
@@ -122,8 +221,12 @@ def process(state: dict) -> dict:
         review_count=review_count,
         directory_count=directory_count,
         total_sources=total_sources,
+        profile_key=profile_key,
+        family_breakdown=family_breakdown,
+        source_pack=source_pack,
     )
 
+    # ── Citation risks (profile-aware missing gaps) ────────────────────────────
     citation_risks = _evaluate_citation_risk(
         earned_count=earned_count,
         review_count=review_count,
@@ -131,32 +234,57 @@ def process(state: dict) -> dict:
         directory_count=directory_count,
         total_sources=total_sources,
         profile_key=profile_key,
+        missing_relevant=missing_relevant if missing_relevant else None,
     )
 
+    # ── Source detection notes ─────────────────────────────────────────────────
     notes_parts = []
     if not earned_media:
         notes_parts.append("Warning: No earned_media data found in state. Taxonomy will be zeroed out.")
+
+    if trust_anchors_found:
+        notes_parts.append(f"Trust anchors detected: {', '.join(trust_anchors_found[:5])}.")
+    else:
+        notes_parts.append(f"No trust anchors found for '{source_pack.get('label', profile_key)}' profile.")
+
+    if inferred_family_names:
+        inferred_labels = ", ".join(sorted(inferred_family_names))
+        notes_parts.append(f"First-party ecosystem evidence detected (not external citations): {inferred_labels}.")
+
     if citation_risks:
         notes_parts.append(f"Identified {len(citation_risks)} citation/trust risk factor(s).")
     else:
         notes_parts.append("Citation footprint appears healthy for this profile.")
 
+    if irrelevant_ignored:
+        notes_parts.append(f"Irrelevant source families intentionally excluded from gap analysis: {', '.join(irrelevant_ignored[:4])}.")
+
     state["source_taxonomy"] = {
-        "owned_count": owned_count,
-        "earned_count": earned_count,
-        "forum_count": forum_count,
-        "review_count": review_count,
-        "directory_count": directory_count,
-        "unknown_count": unknown_count,
-        "trust_mix_summary": trust_mix_summary,
+        # ── Preserved outputs (backward compat) ──
+        "owned_count":          owned_count,
+        "earned_count":         earned_count,
+        "forum_count":          forum_count,
+        "review_count":         review_count,
+        "directory_count":      directory_count,
+        "unknown_count":        unknown_count,
+        "trust_mix_summary":    trust_mix_summary,
         "citation_source_risk": citation_risks,
-        "notes": " ".join(notes_parts)
+        "notes":                " ".join(notes_parts),
+        # ── New outputs (additive) ──
+        "source_pack_used":                 profile_key,
+        "source_family_breakdown":          family_breakdown,
+        "penalized_relevant_gaps":          missing_relevant if missing_relevant else [],
+        "ignored_irrelevant_gaps":          irrelevant_ignored,
+        "relevant_gap_count":               len(missing_relevant) if missing_relevant else 0,
+        "trust_anchors_found":              trust_anchors_found,
+        "source_detection_notes":           f"Pack: '{source_pack.get('label', profile_key)}'. Relevant families: {source_pack.get('relevant_families', [])}.",
     }
 
     console.print(
         f"[bold green]Source Quality Complete[/bold green] | "
         f"Total Sources: [cyan]{total_sources}[/cyan] | "
-        f"Trust Mix: [yellow]{trust_mix_summary.split('.')[0]}[/yellow]"
+        f"Trust Mix: [yellow]{trust_mix_summary.split('.')[0]}[/yellow] | "
+        f"Gaps: [{'red' if missing_relevant else 'green'}]{len(missing_relevant)}[/{'red' if missing_relevant else 'green'}]"
     )
 
     return state

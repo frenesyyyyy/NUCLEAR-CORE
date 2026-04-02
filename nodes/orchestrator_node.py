@@ -2,6 +2,7 @@ import os
 import time
 import json
 import re
+import copy
 from rich.console import Console
 from google import genai
 from google.genai import types
@@ -62,7 +63,7 @@ def process(state: dict) -> dict:
     business_type = state.get("business_type", "tech")
     
     # Defaults based on type
-    type_config = BUSINESS_TYPE_MAP.get(business_type, BUSINESS_TYPE_MAP["tech"])
+    type_config = copy.deepcopy(BUSINESS_TYPE_MAP.get(business_type, BUSINESS_TYPE_MAP["tech"]))
     scale_level = type_config.get("scale_default", "Local")
 
     gemini_key = os.getenv("GEMINI_API_KEY")

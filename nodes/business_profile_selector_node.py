@@ -1,4 +1,4 @@
-"""workflow node for selecting and loading business intelligence profiles."""
+import copy
 from rich.console import Console
 from nodes.business_profiles import BUSINESS_INTELLIGENCE_PROFILES
 from nodes.profile_selector import select_business_profile
@@ -41,8 +41,27 @@ def process(state: dict) -> dict:
             extra_context=extra_context
         )
 
-        # 4. Load the profile object
-        profile = BUSINESS_INTELLIGENCE_PROFILES.get(key, BUSINESS_INTELLIGENCE_PROFILES.get("b2b_saas"))
+        # ── DEFENSIVE SEMANTIC GUARD (v4.5 Hotfix) ──
+        if key == "local_law_firm":
+            hazard_tokens = ["food", "delivery", "restaurant", "ristorante", "trattoria", "pizza", "burger", "meal", "menu"]
+            evidence_str = str(target_industry).lower() + " " + str(business_type).lower() + " " + extra_context.get("client_content_clean", "")[:2000].lower()
+            
+            if any(t in evidence_str for t in hazard_tokens):
+                console.log(f"   [yellow]Hazard Detected[/yellow] | Semantic conflict! Overriding strict legal check and re-running.")
+                key, metadata = select_business_profile(
+                    business_type=business_type,
+                    target_industry=target_industry,
+                    scale_level=scale_level,
+                    schema_type_counts=schema_type_counts,
+                    discovered_location=discovered_location,
+                    extra_context=extra_context,
+                    ignore_legal=True
+                )
+                metadata["reliability"] = "low"
+                metadata["evidence"].append("Semantic boundary conflict detected (food/restaurant keywords found on putative legal entity). Legal override was forcefully BLOCKED.")
+
+        # 4. Load the profile object safely preventing global template mutation
+        profile = copy.deepcopy(BUSINESS_INTELLIGENCE_PROFILES.get(key, BUSINESS_INTELLIGENCE_PROFILES.get("b2b_saas")))
         
         # 5. Populate and report
         new_state.update({

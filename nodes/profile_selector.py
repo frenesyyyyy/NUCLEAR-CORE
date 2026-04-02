@@ -88,7 +88,8 @@ def select_business_profile(
     scale_level: str, 
     schema_type_counts: dict, 
     discovered_location: str,
-    extra_context: dict = None
+    extra_context: dict = None,
+    ignore_legal: bool = False
 ) -> tuple[str, dict]:
     """
     Deterministically select a business profile using structural and semantic signals.
@@ -112,6 +113,16 @@ def select_business_profile(
     
     evidence = []
     reliability = "low"
+    
+    # ── 1.b STRONG OVERRIDES (Lawyers) ──
+    if not ignore_legal:
+        if any(kw in context for kw in ["studio legale", "avvocato", "legal firm", "lawyer"]):
+            evidence.append("Signal: Strong legal keywords override generic platform/freelance hints.")
+            return "local_law_firm", {"reliability": "high", "evidence": evidence}
+
+    if any(kw in context for kw in ["dentist", "dentista", "dentale", "dental clinic"]):
+        evidence.append("Signal: Dental clinic keywords override generic markers.")
+        return "local_dentist", {"reliability": "high", "evidence": evidence}
     
     # ── 2. MARKETPLACE / PLATFORM DETECTION (Structural Priority) ──
     mkt_score = 0
@@ -140,14 +151,8 @@ def select_business_profile(
         reliability = "high" if mkt_score >= 3 else "medium"
         return "marketplace", {"reliability": reliability, "evidence": evidence}
 
-    # ── 3. HIGH PRIORITY LOCAL ENTITIES (Dentist/Legal) ──
-    if any(kw in context for kw in ["dentist", "dentista", "dentale", "dental clinic"]):
-        evidence.append("Signal: Specific dental entity keywords")
-        return "local_dentist", {"reliability": "high", "evidence": evidence}
-
-    if any(kw in context for kw in ["lawyer", "avvocato", "studio legale", "legal firm"]):
-        evidence.append("Signal: Specific legal entity keywords")
-        return "local_law_firm", {"reliability": "high", "evidence": evidence}
+    # ── 3. PREVIOUS HIGH PRIORITY LOCAL ENTITIES (Moved up) ──
+    # Logic extracted to 1.b to prevent marketplace leakage for lawyers/dentists.
 
     # ── 4. VENUE-SPECIFIC CLASSIFICATION (Restaurant/Hospitality) ──
     # Check for local venue signals (singular focus)

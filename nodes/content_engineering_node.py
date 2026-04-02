@@ -45,32 +45,59 @@ def _evaluate_answer_first(content: str) -> int:
     return max(0, min(100, score))
 
 
-def _evaluate_evidence_density(content: str) -> int:
-    """Evaluate presence of numbers, stats, dates, entities, and certifications."""
+def _evaluate_evidence_density(content: str, profile_key: str = "b2b_saas") -> int:
+    """Evaluate presence of numbers, stats, dates, entities, and certifications.
+       If platform profile, reward transactional and UX tokens instead of pure text density.
+    """
+    PLATFORM_PROFILES = {"marketplace", "consumer_saas", "ecommerce_brand"}
     score = 30
+    content_lower = content.lower()
     
-    stats_count = len(re.findall(r'\d+(?:\.\d+)?%?', content))
-    money_count = len(re.findall(r'[$€£]\d+', content))
-    quote_count = len(re.findall(r'\"([^\"]*)\"', content))
-    date_count  = len(re.findall(r'\b(19|20)\d{2}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}\b', content, re.IGNORECASE))
-    cert_count  = len(re.findall(r'\b(?:ISO|SOC\s?2|HIPAA|GDPR|PCI-DSS|PCI|IEEE|FDA)\b', content, re.IGNORECASE))
-    
-    # Heuristic for named entities (capitalized words following a lowercase word space)
-    entity_count = len(re.findall(r'[a-z][.,]?\s+([A-Z][a-z]+)', content))
-    
-    total_hits = stats_count + (money_count * 2) + (quote_count * 2) + (date_count * 1.5) + (cert_count * 2) + (entity_count * 0.5)
-    
-    words = max(1, len(content.split()))
-    density = (total_hits / words) * 100
-    
-    if density > 8:
-        score += 70
-    elif density > 4:
-        score += 40
-    elif density > 1:
-        score += 15
+    if profile_key in PLATFORM_PROFILES:
+        # Platform/App evaluation: transactional UI, app stores, partner workflows
+        app_links = len(re.findall(r'(?i)app\s*store|play\s*store|download|install|ios|android', content_lower))
+        partner_ux = len(re.findall(r'(?i)partner|rider|driver|seller|vendor|merchant|become a', content_lower))
+        cta_ux = len(re.findall(r'(?i)login|sign\s*up|register|get\s*started|order\s*now|checkout', content_lower))
+        support_ux = len(re.findall(r'(?i)faq|help\s*center|support|terms|policies', content_lower))
+        
+        total_hits = (app_links * 3) + (partner_ux * 2) + (cta_ux * 2) + (support_ux * 2)
+        words = max(1, len(content.split()))
+        
+        # Platforms have less words, so density is computed aggressively higher
+        density = (total_hits / words) * 100 * 3
+        
+        if density > 10 or total_hits > 15:
+            score += 70
+        elif density > 5 or total_hits > 8:
+            score += 40
+        elif density > 2 or total_hits > 3:
+            score += 15
+        else:
+            score -= 15
+            
     else:
-        score -= 15
+        # Standard Knowledge/B2B evaluation
+        stats_count = len(re.findall(r'\d+(?:\.\d+)?%?', content))
+        money_count = len(re.findall(r'[$€£]\d+', content))
+        quote_count = len(re.findall(r'\"([^\"]*)\"', content))
+        date_count  = len(re.findall(r'\b(19|20)\d{2}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}\b', content, re.IGNORECASE))
+        cert_count  = len(re.findall(r'\b(?:ISO|SOC\s?2|HIPAA|GDPR|PCI-DSS|PCI|IEEE|FDA)\b', content, re.IGNORECASE))
+        
+        entity_count = len(re.findall(r'[a-z][.,]?\s+([A-Z][a-z]+)', content))
+        
+        total_hits = stats_count + (money_count * 2) + (quote_count * 2) + (date_count * 1.5) + (cert_count * 2) + (entity_count * 0.5)
+        
+        words = max(1, len(content.split()))
+        density = (total_hits / words) * 100
+        
+        if density > 8:
+            score += 70
+        elif density > 4:
+            score += 40
+        elif density > 1:
+            score += 15
+        else:
+            score -= 15
         
     return max(0, min(100, int(score)))
 
@@ -231,8 +258,10 @@ def process(state: dict) -> dict:
         return new_state
         
     # Run heuristics
+    profile_key = state.get("business_profile_key", "b2b_saas")
+    
     answer_first_score = _evaluate_answer_first(content)
-    evidence_density_score = _evaluate_evidence_density(content)
+    evidence_density_score = _evaluate_evidence_density(content, profile_key)
     chunkability_score = _evaluate_chunkability(content)
     llm_style_score = _evaluate_llm_style(content)
     

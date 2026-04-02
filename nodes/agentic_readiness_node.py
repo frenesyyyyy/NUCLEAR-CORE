@@ -144,7 +144,12 @@ def process(state: dict) -> dict:
     """
     console.print("[bold blue]Node: Agentic Readiness[/bold blue] | Auditing agent operability...")
 
-    raw_html = state.get("client_content_raw", "")
+    raw_payload = state.get("client_content_raw", "")
+    if isinstance(raw_payload, list):
+        raw_html = " ".join([p.get("html", "") for p in raw_payload if isinstance(p, dict)])
+    else:
+        raw_html = raw_payload
+    
     business_profile = state.get("business_profile_summary", {})
     
     if not raw_html:

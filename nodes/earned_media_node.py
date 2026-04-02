@@ -18,11 +18,37 @@ from urllib.parse import urlparse
 from typing import Any
 from rich.console import Console
 
+from nodes.source_matrix import (
+    classify_url_to_family,
+    compute_profile_aware_strength,
+    get_source_pack,
+    SOURCE_FAMILIES,
+    infer_families_from_site_evidence,
+    get_canonical_source_urls
+)
+
 console = Console()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Domain Classification Registry
+# Domain Classification Registry & Legacy Mapping
 # ─────────────────────────────────────────────────────────────────────────────
+
+_FAMILY_TO_LEGACY_BUCKET: dict[str, str] = {
+    "app_ecosystems": "review",
+    "review_ecosystems": "review",
+    "software_comparison_ecosystems": "review",
+    "professional_directories": "directory",
+    "local_directories_maps": "directory",
+    "editorial_news_pr": "editorial",
+    "marketplace_partner_ecosystems": "directory",
+    "docs_integrations_developer": "forum",
+    "forums_communities": "forum",
+    "official_registries_legal": "directory",
+    "employer_workforce_reputation": "review",
+    "social_proof_platforms": "review",
+    "owned": "owned",
+    "unknown": "unknown",
+}
 
 # Maps hostname patterns → mention bucket type.
 # Ordered so more specific patterns are checked first.
@@ -269,19 +295,19 @@ def process(state: dict) -> dict:
     location: str          = state.get("discovered_location", "Unknown")
     profile: dict          = state.get("business_profile", {})
     raw_data: dict         = state.get("raw_data_complete", {})
-    external_sources: list = state.get("external_sources", [])
+    external_sources_raw: list = state.get("external_sources_raw", [])
     url: str               = state.get("url", "")
+    profile_key: str       = state.get("business_profile_key", "b2b_saas")
 
     brand_domain = _infer_brand_domain(url)
 
-    # Merge: external_sources (prospector list) + source_urls from raw_data
-    all_source_urls: list[str] = list(external_sources)
-    raw_source_urls = raw_data.get("source_urls", [])
-    for s in raw_source_urls:
-        if s and s not in all_source_urls:
-            all_source_urls.append(s)
+    # Load profile-aware source pack
+    source_pack = get_source_pack(profile_key)
+    pack_weights: dict = source_pack.get("weights_override", {})
 
-    console.print(f"  Brand: [cyan]{brand_name}[/cyan] | Sources to analyse: [yellow]{len(all_source_urls)}[/yellow]")
+    all_source_urls = get_canonical_source_urls(state)
+
+    console.print(f"  Brand: [cyan]{brand_name}[/cyan] | Profile: [yellow]{profile_key}[/yellow] | Sources: [yellow]{len(all_source_urls)}[/yellow]")
 
     # ── Classify each source URL ─────────────────────────────────────────────
     mentions: list[dict[str, Any]] = []

@@ -7,6 +7,12 @@ from urllib.parse import urljoin, urlparse
 from rich.console import Console
 import os
 
+try:
+    from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+except ImportError:
+    sync_playwright = None
+    PlaywrightTimeoutError = Exception
+
 console = Console()
 
 # ---------------------------------------------------------------------------
@@ -91,19 +97,180 @@ def _choose_best_html(primary_html: str, rendered_html: str, primary_text: str, 
     Returns: (chosen_html, source_label, debug_note)
     """
     if not rendered_html:
-        return primary_html, "primary", "ScraperAPI failed or skipped; using primary."
+        return primary_html, "primary", "Render fallback failed or skipped; using primary."
     
     if not primary_html:
-        return rendered_html, "scraperapi_rendered", "Primary failed; using ScraperAPI."
+        return rendered_html, "rendered", "Primary failed; using Render fallback."
 
     primary_wc = len(primary_text.split())
     rendered_wc = len(rendered_text.split())
     
-    # Heuristic: If rendered has >= 2x text or crosses the "thin" threshold while primary doesn't
+    # Heuristic: If rendered has >= 1.5x text or crosses the "thin" threshold while primary doesn't
     if rendered_wc > primary_wc * 1.5 and rendered_wc > 150:
-        return rendered_html, "scraperapi_rendered", f"Rendered HTML selected (Richness: {rendered_wc} vs {primary_wc} words)."
+        return rendered_html, "rendered", f"Rendered HTML selected (Richness: {rendered_wc} vs {primary_wc} words)."
     
     return primary_html, "primary", f"Primary HTML retained (Sufficient richness: {primary_wc} words)."
+
+def _detect_js_heavy_suspect(html: str, text: str) -> tuple[bool, bool]:
+    """
+    Heuristic to detect JS-heavy/Shell-heavy pages and anti-bot blocks.
+    Returns: (is_js_heavy_suspect, is_anti_bot_detected)
+    """
+    word_count = len(text.split())
+    html_len = len(html)
+    script_count = html.count("<script")
+    visible_text_ratio = len(text) / max(1, len(html))
+    
+    triggers = 0
+    if word_count < 180: triggers += 1
+    if html_len > 80000: triggers += 1
+    if script_count > 20: triggers += 1
+    if visible_text_ratio < 0.02: triggers += 1
+    
+    app_shell_markers = ["_NEXT_DATA_", "_next/static", "webpack", "data-reactroot", "window._INITIAL_STATE_"]
+    if any(m in html for m in app_shell_markers): triggers += 1
+    
+    html_lower = html.lower()
+    anti_bot_markers = ["px-cloud", "captcha", "challenge", "cf-", "verify you are human"]
+    is_anti_bot = any(m in html_lower for m in anti_bot_markers)
+    if is_anti_bot: triggers += 1
+    
+    return (triggers >= 2), is_anti_bot
+
+# ---------------------------------------------------------------------------
+# Multi-Page Content Fetcher v2.1 Helpers
+# ---------------------------------------------------------------------------
+
+def _fingerprint_site(html: str, text: str, url: str) -> dict:
+    html_lower = html.lower()
+    
+    has_cart = any(x in html_lower for x in ['add to cart', 'checkout', 'carrello', 'aggiungi al carrello', '🛒'])
+    has_pricing = any(x in html_lower for x in ['pricing', 'prezzi', 'plans', 'abbonamenti'])
+    has_book = any(x in html_lower for x in ['book now', 'prenota', 'appointment', 'appuntamento', 'schedule'])
+    has_vendor = any(x in html_lower for x in ['become a partner', 'sell with us', 'become a driver', 'diventa partner', 'rider', 'vendor'])
+    
+    if has_cart:
+        site_class = "ecommerce"
+    elif has_vendor:
+        site_class = "marketplace"
+    elif has_pricing and ("software" in html_lower or "saas" in html_lower or "api " in html_lower):
+        site_class = "saas"
+    elif has_book:
+        site_class = "local_services"
+    elif len(text.split()) > 1500 and ("investor" in html_lower or "corporate" in html_lower):
+        site_class = "enterprise_corporate"
+    else:
+        site_class = "brochure_local"
+        
+    js_suspect, anti_bot = _detect_js_heavy_suspect(html, text)
+    
+    return {
+        "site_class": site_class,
+        "js_heavy_suspect": js_suspect,
+        "anti_bot_detected": anti_bot,
+    }
+
+def _determine_acquisition_policy(fingerprint: dict) -> dict:
+    sc = fingerprint.get("site_class", "brochure_local")
+    
+    if sc == "brochure_local":
+        max_pages = 3
+        boosts = ["about", "contact", "services", "servizi", "chi siamo"]
+    elif sc == "local_services":
+        max_pages = 4
+        boosts = ["services", "servizi", "book", "prenota", "team", "faq", "trattamenti"]
+    elif sc == "saas":
+        max_pages = 5
+        boosts = ["pricing", "features", "integrations", "docs", "security", "prezzi"]
+    elif sc in ["ecommerce", "marketplace"]:
+        max_pages = 5
+        boosts = ["shop", "category", "returns", "help", "faq", "partner", "seller", "rider", "vendor"]
+    elif sc == "enterprise_corporate":
+        max_pages = 5
+        boosts = ["about", "solutions", "investors", "legal", "contact"]
+    else:
+        max_pages = 3
+        boosts = ["about", "contact"]
+        
+    return {
+        "max_pages_to_fetch": min(max_pages, 5), # MAX GLOBAL LIMIT
+        "boosted_page_tokens": boosts
+    }
+
+def _extract_and_score_links(soup: BeautifulSoup, base_url: str, policy: dict) -> list[dict]:
+    boosts = policy.get("boosted_page_tokens", [])
+    generic_high_value = ["about", "services", "solutions", "product", "pricing", "contact", "faq", "legal", "privacy", "terms", "team", "chi siamo", "contatti"]
+    junk_patterns = ["login", "cart", "account", "checkout", "signup", "?", "#", "password", "forgot"]
+    
+    unique_links = {}
+    
+    for a in soup.find_all("a", href=True):
+        href = a['href']
+        text = a.get_text(strip=True).lower()
+        full_url = urljoin(base_url, href)
+        
+        if urlparse(full_url).netloc != urlparse(base_url).netloc: continue
+        
+        href_lower = href.lower()
+        if any(j in href_lower for j in junk_patterns): continue
+            
+        score = 0
+        assigned_type = "internal"
+        
+        for b in boosts:
+            if b in href_lower or b in text:
+                score += 50
+                assigned_type = b
+        
+        for g in generic_high_value:
+            if g in href_lower or g in text:
+                score += 20
+                assigned_type = g if assigned_type == "internal" else assigned_type
+                
+        if score > 0:
+            if full_url not in unique_links or unique_links[full_url]['score'] < score:
+                unique_links[full_url] = {"url": full_url, "score": score, "type": assigned_type}
+                
+    sorted_links = sorted(unique_links.values(), key=lambda x: x['score'], reverse=True)
+    needed = policy.get("max_pages_to_fetch", 3) - 1
+    return sorted_links[:max(0, needed)]
+
+def _playwright_fetch(url: str) -> tuple[str, str]:
+    """Execute a Playwright rendered fetch with fallback rendering capabilities."""
+    if sync_playwright is None:
+        return "", "Playwright uninstalled"
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            )
+            page = context.new_page()
+            
+            console.print(f"   [cyan]Playwright Tier 2[/cyan]: Rendering {url}...")
+            
+            # Go to page with strict 30s timeout
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            
+            # Wait for content. Try multiple common semantic anchors, fallback to generic wait if none found
+            selectors = ["main", "[role='main']", "h1", "form", "footer", "input[type='text']"]
+            for sel in selectors:
+                try:
+                    page.wait_for_selector(sel, state="attached", timeout=10000)
+                    break
+                except PlaywrightTimeoutError:
+                    continue
+            else:
+                # If all standard selectors timeout, allow a few seconds to let any JS finish loading
+                page.wait_for_timeout(3000)
+
+            content = page.content()
+            browser.close()
+            return content, "Playwright Success"
+            
+    except Exception as e:
+        return "", f"Playwright Exception: {e}"
 
 # ---------------------------------------------------------------------------
 # Semantic Extraction
@@ -227,22 +394,95 @@ def _extract_metadata(soup: BeautifulSoup) -> dict:
     
     return meta
 
-def process(state: dict) -> dict:
-    console.print("[cyan]Content Fetcher Node[/cyan]: Starting v4.5 Anti-Block Rescue Fetch...")
-
-    # A. INITIALIZE DEFAULTS & DEBUG FIELDS
+def _execute_tier_fetch(url: str, locale_code: str, force_playwright: bool = False, max_time: int = 60) -> dict:
+    """Encapsulates the 3-Tier fetch logic for a single URL."""
     fetch_debug_log = []
-    fetch_strategy_used = "failed"
-    primary_fetch_status = None
+    start_time = time.time()
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7" if locale_code == "it" else "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    
+    # B. PRIMARY FETCH
+    primary_res, primary_reason = _primary_fetch(url, headers, timeout=6)
+    primary_html = primary_res.text if primary_res and primary_res.status_code == 200 else ""
+    primary_fetch_status = primary_res.status_code if primary_res else None
+    
+    primary_text = ""
+    if primary_html:
+        p_soup = BeautifulSoup(primary_html, "html.parser")
+        primary_text = _extract_body_text(p_soup)
+        
+    fetch_debug_log.append(f"Primary fetch [{url}]: {primary_reason}")
+
+    # C. ESCALATION DETECTION
+    should_escalate = force_playwright
+    if primary_fetch_status and _looks_blocked_response(primary_fetch_status, primary_html, primary_text):
+        should_escalate = True
+        fetch_debug_log.append(f"Escalation: Blocked/Challenge.")
+    elif _looks_thin_or_shell(primary_html, primary_text):
+        should_escalate = True
+        fetch_debug_log.append("Escalation: Thin/JS-shell.")
+    elif primary_fetch_status is None or primary_fetch_status != 200:
+        should_escalate = True
+        fetch_debug_log.append(f"Escalation: Primary failed.")
+
+    js_suspect, anti_bot = _detect_js_heavy_suspect(primary_html, primary_text)
+    if js_suspect and not force_playwright:
+        should_escalate = True
+        fetch_debug_log.append("Escalation: JS-heavy markers.")
+        
+    rendered_html = ""
+    rendered_text = ""
+    render_success = False
+    render_source = "primary"
     scraperapi_used = False
-    scraperapi_success = False
-    rendered_fetch_used = False
     
-    client_content_raw = ""
-    client_content_clean = ""
-    json_ld_blocks = []
-    schema_type_counts = {}
+    # D. PLAYWRIGHT TIER 2
+    if should_escalate and (time.time() - start_time) < max_time:
+        rendered_html, p_reason = _playwright_fetch(url)
+        fetch_debug_log.append(f"Playwright Tier 2: {p_reason}")
+        if rendered_html:
+            r_soup = BeautifulSoup(rendered_html, "html.parser")
+            rendered_text = _extract_body_text(r_soup)
+            render_wc = len(rendered_text.split())
+            render_ratio = len(rendered_text) / max(1, len(rendered_html))
+            if render_wc < 180 and render_ratio < 0.02:
+                fetch_debug_log.append("Playwright valid failed (too thin). Cascading to Tier 3.")
+                rendered_html = ""
+            else:
+                render_success = True
+                render_source = "playwright"
+
+    # E. SCRAPERAPI TIER 3
+    if should_escalate and not render_success and (time.time() - start_time) < max_time:
+        scraperapi_used = True
+        render_source = "scraperapi"
+        rendered_html, s_reason = _scraperapi_fetch(url, locale_code)
+        fetch_debug_log.append(f"ScraperAPI Tier 3: {s_reason}")
+        if rendered_html:
+            r_soup = BeautifulSoup(rendered_html, "html.parser")
+            rendered_text = _extract_body_text(r_soup)
+
+    chosen_html, strategy, selection_note = _choose_best_html(primary_html, rendered_html, primary_text, rendered_text)
+    fetch_debug_log.append(f"Strategy Selected: {strategy} | {selection_note}")
     
+    return {
+        "chosen_html": chosen_html,
+        "strategy": strategy,
+        "primary_fetch_status": primary_fetch_status,
+        "js_heavy_suspect": js_suspect,
+        "anti_bot": anti_bot,
+        "scraperapi_used": scraperapi_used,
+        "render_source": render_source if strategy == "rendered" else "primary",
+        "fetch_debug_log": fetch_debug_log
+    }
+
+def process(state: dict) -> dict:
+    console.print("[cyan]Content Fetcher Node[/cyan]: Starting v5.0 Multi-Page Adaptive Fetch...")
+
     url = state.get("url", "")
     locale_code = state.get("locale", "en")
     
@@ -255,85 +495,80 @@ def process(state: dict) -> dict:
         return state
 
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7" if locale_code == "it" else "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }
-
-        # B. PRIMARY FETCH
-        primary_res, primary_reason = _primary_fetch(url, headers)
-        primary_html = primary_res.text if primary_res and primary_res.status_code == 200 else ""
-        primary_fetch_status = primary_res.status_code if primary_res else None
+        start_time_global = time.time()
+        MAX_GLOBAL_TIME = 60
         
-        # Preliminary parse for primary
-        primary_text = ""
-        if primary_html:
-            p_soup = BeautifulSoup(primary_html, "html.parser")
-            primary_text = _extract_body_text(p_soup)
+        client_content_raw_list = []
+        client_content_clean_parts = []
+        json_ld_blocks = []
+        schema_type_counts = {}
+        fetched_page_urls = []
+        fetched_page_types = []
+        master_fetch_log = []
         
-        fetch_debug_log.append(f"Primary Fetch Outcome: {primary_reason}")
-
-        # C. ESCALATION DETECTION
-        should_escalate = False
-        if primary_fetch_status and _looks_blocked_response(primary_fetch_status, primary_html, primary_text):
-            should_escalate = True
-            fetch_debug_log.append(f"Escalation Triggered: Blocked/Challenge detected ({primary_fetch_status})")
-        elif _looks_thin_or_shell(primary_html, primary_text):
-            should_escalate = True
-            fetch_debug_log.append("Escalation Triggered: Thin content/JS-shell detected.")
-        elif primary_fetch_status is None or primary_fetch_status != 200:
-            should_escalate = True
-            fetch_debug_log.append(f"Escalation Triggered: Primary fetch problem ({primary_reason})")
-
-        # D. SCRAPERAPI RESCUE
-        rendered_html = ""
-        if should_escalate:
-            scraperapi_used = True
-            rendered_html, s_reason = _scraperapi_fetch(url, locale_code)
-            fetch_debug_log.append(f"ScraperAPI Rescue Outcome: {s_reason}")
-            if rendered_html:
-                scraperapi_success = True
-                rendered_fetch_used = True
-
-        # E. SOURCE SELECTION
-        rendered_text = ""
-        if rendered_html:
-            r_soup = BeautifulSoup(rendered_html, "html.parser")
-            rendered_text = _extract_body_text(r_soup)
-            
-        chosen_html, strategy, selection_note = _choose_best_html(primary_html, rendered_html, primary_text, rendered_text)
-        fetch_strategy_used = strategy
-        fetch_debug_log.append(f"Strategy Selected: {strategy} | {selection_note}")
+        # 1. Fetch Homepage
+        hp_res = _execute_tier_fetch(url, locale_code)
+        master_fetch_log.extend(hp_res["fetch_debug_log"])
         
-        # F. FINAL PARSING (FROM CHOSEN SOURCE)
-        if not chosen_html or len(chosen_html.strip()) < 200:
-            fetch_debug_log.append("Hard failure: No usable HTML recovered after all attempts.")
+        if not hp_res["chosen_html"]:
+            master_fetch_log.append("Hard failure: No usable HTML recovered for homepage.")
             state.update({
                 "audit_integrity_status": "invalid",
                 "audit_integrity_reasons": ["Site extraction failed: Zero or unusable HTML recovered."],
                 "source_of_truth_mode": "offsite_only",
-                "fetch_debug_log": fetch_debug_log
+                "fetch_debug_log": master_fetch_log
             })
             return state
+            
+        hp_soup = BeautifulSoup(hp_res["chosen_html"], "html.parser")
+        hp_text = _extract_body_text(hp_soup)
+        
+        # 2. Fingerprint & Policy
+        fingerprint = _fingerprint_site(hp_res["chosen_html"], hp_text, url)
+        policy = _determine_acquisition_policy(fingerprint)
+        
+        # 3. Add homepage evidence
+        client_content_raw_list.append({"url": url, "html": hp_res["chosen_html"]})
+        client_content_clean_parts.append(hp_text)
+        fetched_page_urls.append(url)
+        fetched_page_types.append("homepage")
+        _parse_schema_blocks(hp_soup, json_ld_blocks, schema_type_counts)
+        meta = _extract_metadata(hp_soup)
+        found_address = _extract_business_address(hp_soup, json_ld_blocks)
+        
+        # 4. Extract and Fetch Links
+        links = _extract_and_score_links(hp_soup, url, policy)
+        playwright_force = fingerprint["js_heavy_suspect"]
+        
+        for link_obj in links:
+            if (time.time() - start_time_global) > MAX_GLOBAL_TIME:
+                master_fetch_log.append("Global fetch timeout reached. Aborting further pages.")
+                break
+                
+            inner_url = link_obj["url"]
+            inner_res = _execute_tier_fetch(inner_url, locale_code, force_playwright=playwright_force, max_time=25)
+            master_fetch_log.extend(inner_res["fetch_debug_log"])
+            
+            if inner_res["chosen_html"]:
+                i_soup = BeautifulSoup(inner_res["chosen_html"], "html.parser")
+                i_text = _extract_body_text(i_soup)
+                
+                if len(i_text) > 100 and i_text not in client_content_clean_parts:
+                    client_content_raw_list.append({"url": inner_url, "html": inner_res["chosen_html"]})
+                    client_content_clean_parts.append(i_text)
+                    fetched_page_urls.append(inner_url)
+                    fetched_page_types.append(link_obj["type"])
+                    _parse_schema_blocks(i_soup, json_ld_blocks, schema_type_counts)
 
-        final_soup = BeautifulSoup(chosen_html, "html.parser")
-        client_content_raw = chosen_html
-        client_content_clean = _extract_body_text(final_soup) 
-        word_count = len(client_content_clean.split())
+        # 5. Aggregate logic
+        merged_clean = "\n\n".join(client_content_clean_parts)
+        word_count = len(merged_clean.split())
         
-        meta = _extract_metadata(final_soup)
-        _parse_schema_blocks(final_soup, json_ld_blocks, schema_type_counts)
-        found_address = _extract_business_address(final_soup, json_ld_blocks)
+        signals = _detect_semantic_signals(hp_soup, word_count, schema_counts=schema_type_counts)
         
-        # New: Semantic Signal Detection
-        signals = _detect_semantic_signals(final_soup, word_count, schema_counts=schema_type_counts)
-        
-        # G. INTEGRITY ASSESSMENT
+        # 6. Integrity
         reasons = []
-        source_of_truth = "hybrid" # default
-
-        # Recalibrated Integrity Logic
+        source_of_truth = "hybrid"
         has_rich_signals = signals["schema_signal_count"] >= 2 or signals["cta_count"] >= 2
         
         if word_count < 150:
@@ -352,20 +587,18 @@ def process(state: dict) -> dict:
                 integrity_status = "valid"
         else:
             integrity_status = "valid"
-
-        if not client_content_clean.strip():
+            
+        if not merged_clean.strip():
             integrity_status = "invalid"
             source_of_truth = "offsite_only"
             reasons.append("No meaningful site-native text extracted.")
-
-        # Rescue reporting rule: 
-        final_note = f"Integrity: {integrity_status} | Strategy: {strategy}"
-        if strategy == "scraperapi_rendered" and primary_fetch_status in [403, 429]:
-            final_note = f"Primary fetch blocked ({primary_fetch_status}); ScraperAPI rendered fallback succeeded."
+            
+        strategy = hp_res["strategy"]
+        final_note = f"Integrity: {integrity_status} | Strategy: {strategy} (Pages: {len(fetched_page_urls)})"
 
         state.update({
-            "client_content_raw": client_content_raw,
-            "client_content_clean": client_content_clean,
+            "client_content_raw": client_content_raw_list,
+            "client_content_clean": merged_clean,
             "client_content_depth": {
                 "word_count": word_count,
                 "extraction_quality": "high" if word_count > 600 else "medium" if word_count > 250 else "low",
@@ -374,12 +607,18 @@ def process(state: dict) -> dict:
                 "cta_count": signals["cta_count"],
                 "semantic_signals": signals
             },
-            "fetch_strategy_used": fetch_strategy_used,
-            "primary_fetch_status": primary_fetch_status,
-            "scraperapi_used": scraperapi_used,
-            "scraperapi_success": scraperapi_success,
-            "rendered_fetch_used": rendered_fetch_used,
-            "fetch_debug_log": fetch_debug_log,
+            "fetch_strategy_used": strategy,
+            "primary_fetch_status": hp_res["primary_fetch_status"],
+            "scraperapi_used": hp_res["scraperapi_used"],
+            "js_heavy_suspect": fingerprint["js_heavy_suspect"],
+            "anti_bot_detected": fingerprint["anti_bot_detected"],
+            "render_source": hp_res["render_source"],
+            "fetched_page_urls": fetched_page_urls,
+            "fetched_page_types": fetched_page_types,
+            "site_fingerprint": fingerprint,
+            "acquisition_mode": "multi_page",
+            "page_selection_notes": f"Policy selected max {policy['max_pages_to_fetch']} pages.",
+            "fetch_debug_log": master_fetch_log,
             "audit_integrity_status": integrity_status,
             "audit_integrity_reasons": reasons,
             "source_of_truth_mode": source_of_truth,
@@ -395,7 +634,7 @@ def process(state: dict) -> dict:
         })
 
     except Exception as e:
-        fetch_debug_log.append(f"CRITICAL FETCH CRASH: {str(e)}")
+        fetch_debug_log = [f"CRITICAL FETCH CRASH: {str(e)}"]
         state.update({
             "audit_integrity_status": "invalid",
             "audit_integrity_reasons": [f"Fetcher Node Crash: {str(e)}"],

@@ -39,6 +39,7 @@ PROTECTED_KEYS = {
 ALLOWED_WRITE_KEYS = {
     "orchestrator": None,
     "content_fetcher": {
+        "client_content_raw",
         "client_content_clean",
         "client_content_depth",
         "schema_type_counts",
@@ -53,6 +54,17 @@ ALLOWED_WRITE_KEYS = {
         "extracted_on_site_address",
         "fetch_notes",
         "fetch_debug",
+        "js_heavy_suspect",
+        "render_fallback_used",
+        "render_source",
+        "anti_bot_detected",
+        "render_success",
+        "render_notes",
+        "fetched_page_urls",
+        "fetched_page_types",
+        "site_fingerprint",
+        "acquisition_mode",
+        "page_selection_notes",
         "status",
     },
     "prospector": {
@@ -90,10 +102,19 @@ ALLOWED_WRITE_KEYS = {
     },
     "earned_media": {
         "earned_media",
+        "external_sources_raw",
         "status",
     },
     "source_quality": {
         "source_taxonomy",
+        # v4.5 Authority Upgrade — additive fields (safe, optional for downstream)
+        "source_pack_used",
+        "source_family_breakdown",
+        "penalized_relevant_gaps",
+        "ignored_irrelevant_gaps",
+        "relevant_gap_count",
+        "trust_anchors_found",
+        "source_detection_notes",
         "status",
     },
     "agentic_readiness": {
@@ -103,6 +124,10 @@ ALLOWED_WRITE_KEYS = {
     "researcher": None,
     "model_analytics": {
         "model_analytics",
+        "raw_visibility_score",
+        "authority_adjusted_visibility_score",
+        "authority_composite",
+        "profile_weight_pack_used",
         "position_adjusted_word_count",
         "status",
     },
