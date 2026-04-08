@@ -9,6 +9,7 @@ while removing placeholder engines by default.
 from typing import Any
 from rich.console import Console
 from nodes.source_matrix import get_profile_scoring_weights
+from nodes.business_profiles import DEFAULT_PROFILE_KEY
 
 console = Console()
 
@@ -118,18 +119,30 @@ def process(state: dict) -> dict:
     tier_stats      = state.get("stress_test_tier_stats", {})
     earned_media    = state.get("earned_media", {})
     source_taxonomy = state.get("source_taxonomy", {})
-    profile_key     = state.get("business_profile_key", "b2b_saas")
+    profile_key     = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
     rep_risk        = earned_media.get("reputation_risk_score", 0)
 
     # 1. Tiered Share of Model (Raw Visibility)
     share_of_model = _calculate_share_of_model(stress_test_log, tier_stats, show_placeholder_engines)
     perp_share = share_of_model.get("Live AI Search", 0.0)
-    raw_visibility_score = perp_share
+    raw_visibility_score = perp_share if isinstance(perp_share, (int, float)) else 0.0
 
     # 2. Authority Composite (Conservative)
     # Blends on-site semantic consensus with off-site authority
     auth_match = state.get("authority_match_score", 0)
     brand_strength = earned_media.get("profile_aware_strength", earned_media.get("strength_score", 0))
+    
+    PLATFORM_LIKE_PROFILES = {"marketplace", "consumer_saas", "ecommerce_brand"}
+    inferred_families = state.get("earned_media", {}).get("first_party_inferred_families", [])
+    if profile_key in PLATFORM_LIKE_PROFILES and inferred_families:
+        rescue_pts = 0
+        for f in inferred_families:
+            conf = f.get("confidence", "low")
+            if conf == "high": rescue_pts += 12
+            elif conf == "medium": rescue_pts += 8
+        
+        brand_strength = min(100, brand_strength + min(24, rescue_pts))
+
     # 60% weight to off-site strength (trust), 40% to on-site authority matching (relevance)
     authority_composite = (auth_match * 0.4) + (brand_strength * 0.6)
 
@@ -152,6 +165,22 @@ def process(state: dict) -> dict:
         (authority_composite * weights.get("authority", 0)) +
         (conf * weights.get("confidence", 0))
     )
+
+    # -- Dynamic EEAT Penalty Logic --
+    from nodes.business_profiles import BUSINESS_INTELLIGENCE_PROFILES
+    active_profile = BUSINESS_INTELLIGENCE_PROFILES.get(profile_key, BUSINESS_INTELLIGENCE_PROFILES.get(DEFAULT_PROFILE_KEY))
+    profile_weights = active_profile.get("scoring_weights", {})
+    eeat_weight = float(profile_weights.get("eeat_trust", 0.0))
+    
+    # Check for missing Author Bios (EEAT)
+    schema_counts = state.get("schema_type_counts", {})
+    has_person_schema = any("person" in str(k).lower() for k in schema_counts)
+    raw_text = str(state.get("client_content_clean", "")).lower() + str(state.get("raw_data_complete", {})).lower()
+    has_author_text = any(w in raw_text for w in ["author", "bio", "doctor", "practitioner", "team", "about us", "chi siamo"])
+    
+    if not (has_person_schema or has_author_text):
+        eeat_penalty = 20.0 * eeat_weight
+        geo_score = max(0.0, geo_score - eeat_penalty)
 
     # 5. Engine Breakdown (Live Only by default)
     engine_breakdown = [
@@ -183,6 +212,7 @@ def process(state: dict) -> dict:
 
     # 9. Notes
     notes = f"Profile-aware recalibration applied '{profile_key}'. Raw visibility {raw_visibility_score}% adjusted to {authority_adjusted_visibility_score:.1f}% based on auth composite {authority_composite:.1f}. "
+    notes += f"Score dynamically adjusted using the [{profile_key}] weighting matrix to prevent structural bias. "
     if not show_placeholder_engines:
         notes += "Only Live AI Search evidence is currently integrated."
 

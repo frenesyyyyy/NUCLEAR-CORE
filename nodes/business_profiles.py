@@ -1,677 +1,386 @@
-"""Business intelligence layer for GEO specialization."""
+"""
+Business Intelligence Layer — 6 Canonical Agency Profiles.
+
+Defines the authoritative profile registry for the GEO pipeline.
+Every downstream node MUST import DEFAULT_PROFILE_KEY from this module
+for its .get() fallbacks instead of hardcoding strings.
+
+Profile Architecture:
+  - 6 canonical keys (the ONLY keys a pipeline should actively select)
+  - Legacy Alias Router (maps retired/transitional keys to canonical ones)
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global Fallback Constant — import this everywhere, never hardcode the string
+# ─────────────────────────────────────────────────────────────────────────────
+DEFAULT_PROFILE_KEY = "b2b_saas_tech"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6 Canonical Agency Profiles
+# ─────────────────────────────────────────────────────────────────────────────
 
 BUSINESS_INTELLIGENCE_PROFILES = {
-    "b2b_saas": {
-        "label": "B2B SaaS",
-        "macro_industry": "Software",
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 1. B2B SaaS / Tech
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "b2b_saas_tech": {
+        "label": "B2B SaaS / Tech",
+        "macro_industry": "Software & Technology",
         "geo_behavior": "authority_driven",
         "query_style": "technical_authority",
         "scale_default": "Global",
         "location_enforce": False,
         "stress_test_budget": {"blind": 14, "contextual": 12, "branded": 8},
         "serper_mode": "global_leaders",
-        "allowed_schema_types": ["Organization", "SoftwareApplication", "WebSite", "FAQPage", "BreadcrumbList"],
-        "allowed_blueprint_signals": ["technical_authority", "use_case_expansion", "comparison_strategy"],
+        "allowed_schema_types": [
+            "SoftwareApplication", "Organization", "WebSite",
+            "FAQPage", "HowTo", "Product",
+        ],
         "must_have_signals": [
-            "Organization schema",
-            "Product or SoftwareApplication schema",
-            "use-case pages",
-            "comparison pages",
-            "integration pages",
-            "pricing page"
+            "use-case pages", "pricing page", "integration pages",
+            "API documentation", "comparison pages",
         ],
-        "risk_factors": [
-            "generic homepage copy",
-            "no use-case specificity",
-            "weak branded demand",
-            "no authority references"
-        ],
+        "scoring_weights": {
+            "technical": 0.50,
+            "content_depth": 0.40,
+            "eeat_trust": 0.10,
+        },
         "persona_templates": [
-            {
-                "persona": "Founder / Operator",
-                "intent": "problem-solving",
-                "query_types": ["blind", "contextual"],
-                "example_queries": [
-                    "best tools for automating customer onboarding",
-                    "best B2B software for reducing churn"
-                ]
-            },
-            {
-                "persona": "Head of Ops / Buyer",
-                "intent": "comparison",
-                "query_types": ["contextual", "branded"],
-                "example_queries": [
-                    "best customer support platforms for SaaS",
-                    "enterprise software alternatives for support"
-                ]
-            },
-            {
-                "persona": "End User / Evaluator",
-                "intent": "validation",
-                "query_types": ["branded"],
-                "example_queries": [
-                    "[brand] pricing for enterprises",
-                    "[brand] reviews for SaaS"
-                ]
-            }
+            {"persona": "Founder / Operator", "intent": "problem-solving"},
+            {"persona": "Head of Ops / Buyer", "intent": "comparison"},
+            {"persona": "End User / Evaluator", "intent": "validation"},
         ],
         "blind_fallback_templates": {
-            "it": ["migliori software b2b", "piattaforme saas per aziende", "strumenti automazione business", "software gestione clienti b2b", "migliori tool produttività aziendale"],
-            "en": ["best b2b software", "saas platforms for enterprise", "business automation tools", "customer management software b2b", "best enterprise productivity tools"]
+            "en": ["best b2b software", "saas platforms for enterprise", "business automation tools"],
+            "it": ["migliori software b2b", "piattaforme saas per aziende", "strumenti automazione business"],
         },
         "contextual_fallback_templates": {
-            "it": ["come scegliere un software b2b", "migliori integrazioni saas per ufficio", "roi software b2b testimonianze"],
-            "en": ["how to choose b2b software", "best saas integrations for office", "b2b software roi case studies"]
-        }
-    },
-
-    "consumer_saas": {
-        "label": "Consumer SaaS / App",
-        "macro_industry": "Software",
-        "geo_behavior": "discovery_plus_validation",
-        "query_style": "feature_benefit",
-        "scale_default": "Global",
-        "location_enforce": False,
-        "stress_test_budget": {"blind": 10, "contextual": 10, "branded": 8},
-        "serper_mode": "global_leaders",
-        "allowed_schema_types": ["SoftwareApplication", "WebSite", "FAQPage", "AggregateRating"],
-        "allowed_blueprint_signals": ["feature_highlight", "trust_signals", "conversion_optimization"],
-        "must_have_signals": [
-            "app store presence",
-            "reviews/testimonials",
-            "feature pages",
-            "FAQ",
-            "pricing"
-        ],
-        "risk_factors": [
-            "unclear differentiation",
-            "weak trust signals",
-            "no comparisons"
-        ],
-        "persona_templates": [
-            {
-                "persona": "Curious User",
-                "intent": "discovery",
-                "query_types": ["blind"],
-                "example_queries": [
-                    "best productivity apps",
-                    "apps to organize my life"
-                ]
-            },
-            {
-                "persona": "Comparer",
-                "intent": "decision",
-                "query_types": ["contextual"],
-                "example_queries": [
-                    "notion vs evernote",
-                    "best habit tracking app"
-                ]
-            },
-            {
-                "persona": "Buyer",
-                "intent": "validation",
-                "query_types": ["branded"],
-                "example_queries": [
-                    "[brand] worth it",
-                    "[brand] premium review"
-                ]
-            }
-        ],
-    },
-
-    "ecommerce_brand": {
-        "label": "E-commerce Brand",
-        "macro_industry": "Retail",
-        "geo_behavior": "comparison_driven",
-        "query_style": "commercial_comparison",
-        "scale_default": "National",
-        "location_enforce": False,
-        "stress_test_budget": {"blind": 8, "contextual": 12, "branded": 8},
-        "serper_mode": "category_leaders",
-        "allowed_schema_types": ["Product", "Offer", "AggregateOffer", "Review", "Organization"],
-        "allowed_blueprint_signals": ["conversion_hooks", "social_proof", "category_authority"],
-        "must_have_signals": [
-            "Product schema",
-            "Offer or AggregateOffer schema",
-            "reviews",
-            "collection/category pages",
-            "shipping/returns info"
-        ],
-        "risk_factors": [
-            "thin product descriptions",
-            "no review proof",
-            "no category authority content"
-        ],
-        "persona_templates": [
-            {
-                "persona": "Explorer",
-                "intent": "discovery",
-                "query_types": ["blind"],
-                "example_queries": [
-                    "best minimalist sneakers",
-                    "best protein snacks online"
-                ]
-            },
-            {
-                "persona": "Comparer",
-                "intent": "comparison",
-                "query_types": ["contextual"],
-                "example_queries": [
-                    "nike vs adidas running shoes",
-                    "best budget streetwear brands"
-                ]
-            },
-            {
-                "persona": "Buyer",
-                "intent": "validation",
-                "query_types": ["branded"],
-                "example_queries": [
-                    "[brand] reviews",
-                    "[product] worth it"
-                ]
-            }
-        ],
-    },
-
-    "marketplace": {
-        "label": "Marketplace / Platform",
-        "macro_industry": "Platform",
-        "geo_behavior": "authority_plus_category",
-        "query_style": "market_matching",
-        "scale_default": "National",
-        "location_enforce": False,
-        "stress_test_budget": {"blind": 12, "contextual": 10, "branded": 8},
-        "serper_mode": "industry_leaders",
-        "allowed_schema_types": ["Organization", "WebSite", "FAQPage", "BreadcrumbList", "SearchAction"],
-        "allowed_blueprint_signals": ["platform_trust", "category_discovery", "partner_onboarding"],
-        "must_have_signals": [
-            "category landing pages",
-            "trust and safety pages",
-            "seller/buyer explainer pages",
-            "FAQ"
-        ],
-        "risk_factors": [
-            "two-sided value prop unclear",
-            "weak category pages",
-            "brand confusion"
-        ],
-        "persona_templates": [
-            {
-                "persona": "Supply Side",
-                "intent": "opportunity seeking",
-                "query_types": ["blind", "contextual"],
-                "example_queries": [
-                    "come iscrivere ristorante app delivery",
-                    "diventare partner piattaforma consegne"
-                ]
-            },
-            {
-                "persona": "Demand Side",
-                "intent": "discovery",
-                "query_types": ["blind", "contextual"],
-                "example_queries": [
-                    "migliori consegne a domicilio",
-                    "app per ordinare cibo",
-                    "servizi delivery recensioni",
-                    "ordinare spesa online veloce"
-                ]
-            },
-            {
-                "persona": "Evaluator",
-                "intent": "validation",
-                "query_types": ["branded"],
-                "example_queries": [
-                    "[brand] legit",
-                    "[brand] costi consegna"
-                ]
-            }
-        ],
-        "blind_fallback_templates": {
-            "it": [
-                "migliori app consegna cibo italia",
-                "piattaforme delivery più usate in italia",
-                "app per ordinare cibo a domicilio",
-                "servizi delivery affidabili in italia",
-                "alternative a uber eats italia",
-                "app con più ristoranti convenzionati"
-            ],
-            "en": [
-                "best food delivery apps",
-                "most used delivery platforms",
-                "apps for ordering food at home",
-                "reliable delivery services",
-                "alternatives to main delivery apps",
-                "apps with most partner restaurants"
-            ]
+            "en": ["how to choose b2b software", "best saas integrations for office"],
+            "it": ["come scegliere un software b2b", "migliori integrazioni saas per ufficio"],
         },
-        "contextual_fallback_templates": {
-            "it": [
-                "come funzionano le app di delivery",
-                "quanto costa il delivery in italia",
-                "consegna spesa a domicilio opinioni",
-                "migliori servizi per ordinare cena online"
-            ],
-            "en": [
-                "how do delivery apps work",
-                "cost of food delivery services",
-                "grocery delivery reviews",
-                "best services to order dinner online"
-            ]
-        }
     },
 
-    "local_dentist": {
-        "label": "Local Dentist",
-        "macro_industry": "Healthcare",
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 2. Local Service / YMYL
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "local_service_ymyl": {
+        "label": "Local Service / YMYL",
+        "macro_industry": "Healthcare & Local Services",
         "geo_behavior": "proximity_trust",
         "query_style": "medical_trust",
         "scale_default": "Local",
         "location_enforce": True,
-        "stress_test_budget": {"blind": 2, "contextual": 5, "branded": 7},
+        "stress_test_budget": {"blind": 5, "contextual": 7, "branded": 8},
         "serper_mode": "local_leaders",
-        "allowed_schema_types": ["Dentist", "LocalBusiness", "PostalAddress", "OpeningHoursSpecification", "MedicalBusiness"],
-        "allowed_blueprint_signals": ["local_trust", "appointment_conversion", "doctor_authority"],
+        "allowed_schema_types": [
+            "LocalBusiness", "Person", "MedicalBusiness",
+            "PostalAddress", "Dentist", "Physician",
+        ],
         "must_have_signals": [
-            "LocalBusiness or Dentist schema",
-            "city/location mentions",
-            "reviews",
-            "emergency service pages",
-            "doctor profiles"
+            "city/location mentions", "doctor/practitioner bios",
+            "reviews", "NAP consistency", "appointment booking",
         ],
-        "risk_factors": [
-            "missing city name",
-            "weak doctor bios",
-            "no trust/legal info"
-        ],
+        "scoring_weights": {
+            "eeat_trust": 0.50,
+            "local_entities": 0.30,
+            "technical": 0.20,
+        },
         "persona_templates": [
-            {
-                "persona": "Emergency Patient",
-                "intent": "urgent",
-                "query_types": ["contextual"],
-                "example_queries": [
-                    "emergency dentist near me",
-                    "tooth pain dentist Rome"
-                ]
-            },
-            {
-                "persona": "Family Patient",
-                "intent": "trust",
-                "query_types": ["contextual", "branded"],
-                "example_queries": [
-                    "best family dentist Rome",
-                    "[clinic] reviews"
-                ]
-            }
+            {"persona": "Emergency Patient", "intent": "urgent"},
+            {"persona": "Family Patient", "intent": "trust"},
+            {"persona": "Insurance Researcher", "intent": "comparison"},
         ],
         "blind_fallback_templates": {
-            "it": ["miglior dentista zona", "studio dentistico convenzionato", "dentista per bambini", "urgenza dentista oggi", "pulizia denti costo"],
-            "en": ["best dentist near me", "trusted dental clinic", "pediatric dentist nearby", "emergency dental appointment", "teeth cleaning cost"]
+            "en": ["best local specialist near me", "trusted clinic nearby", "urgent local service"],
+            "it": ["miglior specialista in zona", "clinica affidabile vicino a me", "servizio locale urgente"],
         },
         "contextual_fallback_templates": {
-            "it": ["quanto costa un impianto dentale", "migliori studi dentistici per estetica", "dentista aperto sabato"],
-            "en": ["cost of dental implants", "best cosmetic dentistry", "dentist open on saturday"]
-        }
-    },
-
-    "local_law_firm": {
-        "label": "Local Law Firm",
-        "macro_industry": "Professional Services",
-        "geo_behavior": "trust_authority_local",
-        "query_style": "legal_authority",
-        "scale_default": "Local",
-        "location_enforce": True,
-        "stress_test_budget": {"blind": 3, "contextual": 5, "branded": 6},
-        "serper_mode": "local_leaders",
-        "allowed_schema_types": ["LegalService", "LocalBusiness", "PostalAddress", "Attorney"],
-        "allowed_blueprint_signals": ["legal_authority", "localized_practice_expertise"],
-        "must_have_signals": [
-            "practice area pages",
-            "lawyer bios",
-            "bar credentials",
-            "location pages"
-        ],
-        "risk_factors": [
-            "generic legal copy",
-            "no named professionals",
-            "weak niche specialization"
-        ],
-        "persona_templates": [
-            {
-                "persona": "Urgent Client",
-                "intent": "problem resolution",
-                "query_types": ["contextual"],
-                "example_queries": [
-                    "real estate lawyer Rome",
-                    "lawyer for landlord disputes Rome"
-                ]
-            },
-            {
-                "persona": "Evaluator",
-                "intent": "trust",
-                "query_types": ["branded"],
-                "example_queries": [
-                    "[firm] reviews",
-                    "[lawyer name] avvocato Roma"
-                ]
-            }
-        ],
-        "blind_fallback_templates": {
-            "it": ["miglior avvocato civilista", "studio legale esperto in successioni", "avvocato penalista h24", "consulenza legale online", "avvocato per separazione"],
-            "en": ["best civil lawyer", "law firm for inheritance", "criminal defense attorney h24", "online legal consultation", "divorce lawyer nearby"]
+            "en": ["cost of local service", "how to choose the best clinic"],
+            "it": ["costo del servizio locale", "come scegliere la migliore clinica"],
         },
-        "contextual_fallback_templates": {
-            "it": ["costo causa legale italia", "come scegliere un buon avvocato", "tempi processo civile"],
-            "en": ["legal fees in italy", "how to choose a good lawyer", "civil trial duration"]
-        }
     },
 
-    "freelancer_consultant": {
-        "label": "Freelancer / Consultant",
-        "macro_industry": "Services",
-        "geo_behavior": "personal_expertise",
-        "query_style": "personal_expertise",
-        "scale_default": "Local",
-        "location_enforce": True,
-        "stress_test_budget": {"blind": 4, "contextual": 5, "branded": 5},
-        "serper_mode": "local_or_niche_leaders",
-        "allowed_schema_types": ["Person", "LocalBusiness", "Service"],
-        "allowed_blueprint_signals": ["personal_brand", "outcome_proof", "localized_presence"],
-        "must_have_signals": [
-            "clear personal brand",
-            "case studies",
-            "service pages",
-            "testimonials"
-        ],
-        "risk_factors": [
-            "anonymous site",
-            "no proof of work",
-            "unclear positioning"
-        ],
-        "persona_templates": [
-            {
-                "persona": "Lead",
-                "intent": "solution seeking",
-                "query_types": ["blind", "contextual"],
-                "example_queries": [
-                    "freelance copywriter for SaaS",
-                    "branding consultant Rome"
-                ]
-            },
-            {
-                "persona": "Evaluator",
-                "intent": "validation",
-                "query_types": ["branded"],
-                "example_queries": [
-                    "[name] reviews",
-                    "[name] portfolio"
-                ]
-            }
-        ],
-        "blind_fallback_templates": {
-            "it": ["consulente marketing esperto", "freelance per siti web", "esperto seo per pmi", "copywriter per brochure", "coach aziendale roma"],
-            "en": ["expert marketing consultant", "freelance web designer", "seo expert for small business", "copywriter for brochures", "business coach nearby"]
-        },
-        "contextual_fallback_templates": {
-            "it": ["perché assumere un consulente esterno", "costo freelance orario", "esempi di successo freelance"],
-            "en": ["why hire a consultant", "freelance hourly rates", "freelance success stories"]
-        }
-    },
-
-    "agency_marketing": {
-        "label": "Marketing Agency",
-        "macro_industry": "Services",
-        "geo_behavior": "authority_case_study",
-        "query_style": "case_study_authority",
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 3. E-commerce / Retail
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "ecommerce_retail": {
+        "label": "E-commerce / Retail",
+        "macro_industry": "Retail & Consumer Goods",
+        "geo_behavior": "comparison_driven",
+        "query_style": "commercial_comparison",
         "scale_default": "National",
         "location_enforce": False,
-        "stress_test_budget": {"blind": 8, "contextual": 8, "branded": 6},
+        "stress_test_budget": {"blind": 10, "contextual": 12, "branded": 8},
         "serper_mode": "category_leaders",
-        "allowed_schema_types": ["Organization", "Service", "WebSite", "FAQPage"],
-        "allowed_blueprint_signals": ["industry_verticals", "case_study_anchoring", "partner_status"],
+        "allowed_schema_types": [
+            "Product", "Offer", "AggregateOffer",
+            "Review", "Organization", "BreadcrumbList",
+        ],
         "must_have_signals": [
-            "case studies",
-            "service pages",
-            "team page",
-            "industry specialization pages"
+            "Product schema", "collection/category pages",
+            "reviews", "cart/checkout flow", "shipping info",
         ],
-        "risk_factors": [
-            "empty agency fluff",
-            "no outcomes",
-            "no specialization"
-        ],
+        "scoring_weights": {
+            "technical": 0.40,
+            "eeat_trust": 0.30,
+            "content_depth": 0.30,
+        },
         "persona_templates": [
-            {
-                "persona": "Founder / CMO",
-                "intent": "provider discovery",
-                "query_types": ["blind", "contextual"],
-                "example_queries": [
-                    "best SaaS marketing agency",
-                    "SEO agency for e-commerce"
-                ]
-            },
-            {
-                "persona": "Buyer",
-                "intent": "validation",
-                "query_types": ["branded"],
-                "example_queries": [
-                    "[agency] reviews",
-                    "[agency] case studies"
-                ]
-            }
+            {"persona": "Explorer", "intent": "discovery"},
+            {"persona": "Comparer", "intent": "comparison"},
+            {"persona": "Buyer", "intent": "validation"},
         ],
         "blind_fallback_templates": {
-            "it": ["migliore agenzia seo italia", "agenzia marketing per ecommerce", "esperti lead generation b2b", "agenzia pubblicità social", "consulenza crescita aziendale"],
-            "en": ["best seo agency", "marketing agency for ecommerce", "b2b lead generation experts", "social media ad agency", "business growth consulting"]
+            "en": ["best products online", "where to buy quality items", "top rated online store"],
+            "it": ["migliori prodotti online", "dove comprare articoli di qualita", "miglior negozio online"],
         },
         "contextual_fallback_templates": {
-            "it": ["case studies agenzie marketing eccellenti", "come scalare un ecommerce con agenzia", "migliori agenzie digitali milano"],
-            "en": ["marketing agency case studies", "how to scale ecommerce with agency", "best digital agencies nearby"]
-        }
+            "en": ["brand comparison online", "best budget online store"],
+            "it": ["confronto brand online", "miglior negozio online economico"],
+        },
     },
 
-    "education_course_provider": {
-        "label": "Education / Course Provider",
-        "macro_industry": "Education",
-        "geo_behavior": "outcome_trust",
-        "query_style": "learning_outcomes",
-        "scale_default": "National",
-        "location_enforce": False,
-        "stress_test_budget": {"blind": 8, "contextual": 10, "branded": 6},
-        "serper_mode": "category_leaders",
-        "allowed_schema_types": ["Course", "EducationEvent", "Organization", "Review"],
-        "allowed_blueprint_signals": ["outcome_validation", "curriculum_depth", "instructor_trust"],
-        "must_have_signals": [
-            "course pages",
-            "outcomes/certifications",
-            "instructor bios",
-            "reviews/testimonials"
-        ],
-        "risk_factors": [
-            "no instructor proof",
-            "no course outcomes",
-            "generic edu promises"
-        ],
-        "persona_templates": [
-            {
-                "persona": "Learner",
-                "intent": "skill acquisition",
-                "query_types": ["blind", "contextual"],
-                "example_queries": [
-                    "best data analytics course",
-                    "how to learn python online"
-                ]
-            },
-            {
-                "persona": "Evaluator",
-                "intent": "validation",
-                "query_types": ["branded"],
-                "example_queries": [
-                    "[academy] review",
-                    "[course] worth it"
-                ]
-            }
-        ],
-    },
-
-    "media_blog": {
-        "label": "Media / Blog",
-        "macro_industry": "Publishing",
-        "geo_behavior": "discovery_driven",
-        "query_style": "thought_leadership",
-        "scale_default": "National",
-        "location_enforce": False,
-        "stress_test_budget": {"blind": 12, "contextual": 8, "branded": 4},
-        "serper_mode": "topic_authorities",
-        "allowed_schema_types": ["Article", "NewsArticle", "BlogPosting", "Person"],
-        "allowed_blueprint_signals": ["topical_clusters", "author_credibility", "content_freshness"],
-        "must_have_signals": [
-            "author pages",
-            "content clusters",
-            "freshness",
-            "entity-rich articles"
-        ],
-        "risk_factors": [
-            "thin editorial identity",
-            "weak author trust",
-            "no topical clustering"
-        ],
-        "persona_templates": [
-            {
-                "persona": "Searcher",
-                "intent": "information seeking",
-                "query_types": ["blind", "contextual"],
-                "example_queries": [
-                    "how to build muscle naturally",
-                    "rome study visa tips"
-                ]
-            },
-            {
-                "persona": "Loyal Reader",
-                "intent": "navigation/validation",
-                "query_types": ["branded"],
-                "example_queries": [
-                    "[site] review",
-                    "[site] author"
-                ]
-            }
-        ],
-    },
-
-    "restaurant_hospitality": {
-        "label": "Restaurant / Hospitality",
-        "macro_industry": "Hospitality",
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 4. Hospitality / Travel
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "hospitality_travel": {
+        "label": "Hospitality / Travel",
+        "macro_industry": "Hospitality & Travel",
         "geo_behavior": "experience_proximity",
         "query_style": "sensory_experiential",
         "scale_default": "Local",
         "location_enforce": True,
-        "stress_test_budget": {"blind": 3, "contextual": 5, "branded": 6},
+        "stress_test_budget": {"blind": 8, "contextual": 10, "branded": 6},
         "serper_mode": "local_leaders",
-        "allowed_schema_types": ["Restaurant", "LocalBusiness", "Menu", "FoodEstablishment", "PostalAddress", "OpeningHoursSpecification"],
-        "allowed_blueprint_signals": ["menu_optimization", "reservation_hooks", "local_geo_signals"],
+        "allowed_schema_types": [
+            "Hotel", "LodgingBusiness", "Restaurant", "LocalBusiness",
+            "Menu", "OpeningHoursSpecification", "TouristAttraction",
+        ],
         "must_have_signals": [
-            "menu",
-            "location",
-            "reservation info",
-            "photos",
-            "reviews"
+            "menu text", "reservation/booking info", "photos",
+            "reviews", "room types", "location/address",
         ],
-        "risk_factors": [
-            "no menu text",
-            "thin location context",
-            "brand hidden behind Instagram only"
-        ],
+        "scoring_weights": {
+            "local_entities": 0.50,
+            "eeat_trust": 0.25,
+            "technical": 0.25,
+        },
         "persona_templates": [
-            {
-                "persona": "Nearby Diner",
-                "intent": "discovery",
-                "query_types": ["contextual"],
-                "example_queries": [
-                    "migliore pasta fatta in casa",
-                    "ristorante romantico centro",
-                    "dove mangiare bene vicino a me"
-                ]
-            },
-            {
-                "persona": "Evaluator",
-                "intent": "validation",
-                "query_types": ["branded"],
-                "example_queries": [
-                    "[restaurant] recensioni",
-                    "[restaurant] menu"
-                ]
-            }
+            {"persona": "Traveler / Guest", "intent": "discovery"},
+            {"persona": "Event Planner", "intent": "comparison"},
+            {"persona": "Review Checker", "intent": "validation"},
         ],
         "blind_fallback_templates": {
-            "it": [
-                "migliori ristoranti in zona",
-                "posti dove mangiare bene all'aperto",
-                "ristoranti con cucina tipica locale",
-                "migliori trattorie recensite",
-                "dove cenare stasera in centro"
-            ],
-            "en": [
-                "best restaurants nearby",
-                "top rated local dining",
-                "best places for outdoor dinner",
-                "authentic local cuisine restaurants",
-                "where to eat tonight in city center"
-            ]
+            "en": ["best places to stay", "top rated local dining", "authentic local cuisine"],
+            "it": ["i posti migliori dove stare", "migliori ristoranti locali recensiti", "cucina locale autentica"],
         },
         "contextual_fallback_templates": {
-            "it": [
-                "menu e prezzi ristoranti tipici",
-                "esperienze culinarie uniche in zona",
-                "ristoranti per occasioni speciali"
-            ],
-            "en": [
-                "menu and prices for local restaurants",
-                "unique dining experiences nearby",
-                "best restaurants for special occasions"
-            ]
-        }
+            "en": ["menu and prices", "unique experiences nearby"],
+            "it": ["menu e prezzi", "esperienze uniche in zona"],
+        },
     },
 
-    "local_tech_provider": {
-        "label": "Local Tech / IT Services",
-        "macro_industry": "Technology Services",
-        "geo_behavior": "geo_technical",
-        "query_style": "geo_technical",
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 5. Publisher / Media
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "publisher_media": {
+        "label": "Publisher / Media",
+        "macro_industry": "Publishing & Media",
+        "geo_behavior": "discovery_driven",
+        "query_style": "thought_leadership",
+        "scale_default": "Global",
+        "location_enforce": False,
+        "stress_test_budget": {"blind": 12, "contextual": 10, "branded": 6},
+        "serper_mode": "topic_authorities",
+        "allowed_schema_types": [
+            "Article", "NewsArticle", "BlogPosting",
+            "Person", "Organization", "WebPage",
+        ],
+        "must_have_signals": [
+            "author pages", "content clusters", "freshness signals",
+            "publication dates", "editorial guidelines",
+        ],
+        "scoring_weights": {
+            "eeat_trust": 0.40,
+            "content_depth": 0.40,
+            "technical": 0.20,
+        },
+        "persona_templates": [
+            {"persona": "Information Searcher", "intent": "information seeking"},
+            {"persona": "Loyal Reader", "intent": "validation"},
+            {"persona": "Content Curator", "intent": "aggregation"},
+        ],
+        "blind_fallback_templates": {
+            "en": ["how to guides", "latest news on industry", "expert opinions"],
+            "it": ["guide approfondite", "ultime notizie di settore", "opinioni degli esperti"],
+        },
+        "contextual_fallback_templates": {
+            "en": ["detailed facts and figures", "trend analysis"],
+            "it": ["dati e cifre dettagliate", "analisi dei trend"],
+        },
+    },
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 6. Professional Services
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "professional_services": {
+        "label": "Professional Services",
+        "macro_industry": "Professional & Business Services",
+        "geo_behavior": "authority_case_study",
+        "query_style": "case_study_authority",
+        "scale_default": "National",
+        "location_enforce": False,
+        "stress_test_budget": {"blind": 8, "contextual": 8, "branded": 8},
+        "serper_mode": "category_leaders",
+        "allowed_schema_types": [
+            "Organization", "Service", "Person",
+            "ProfessionalService", "LocalBusiness",
+        ],
+        "must_have_signals": [
+            "case studies", "service pages", "team page",
+            "client testimonials", "industry certifications",
+        ],
+        "scoring_weights": {
+            "eeat_trust": 0.50,
+            "content_depth": 0.30,
+            "technical": 0.20,
+        },
+        "persona_templates": [
+            {"persona": "Decision Maker", "intent": "provider discovery"},
+            {"persona": "Evaluator / Procurement", "intent": "comparison"},
+            {"persona": "Referral Seeker", "intent": "validation"},
+        ],
+        "blind_fallback_templates": {
+            "en": ["best consulting firms", "expert professional services", "industry leading agency"],
+            "it": ["migliori societa di consulenza", "servizi professionali esperti", "agenzia leader di settore"],
+        },
+        "contextual_fallback_templates": {
+            "en": ["case studies for consulting", "roi for professional services"],
+            "it": ["case study di consulenza", "roi per i servizi professionali"],
+        },
+    },
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 7. Marketplace / Aggregator
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "marketplace_aggregator": {
+        "label": "Marketplace / Aggregator",
+        "macro_industry": "Aggregators & Directories",
+        "geo_behavior": "authority_driven",
+        "query_style": "informational_comparison",
+        "scale_default": "Global",
+        "location_enforce": False,
+        "stress_test_budget": {"blind": 14, "contextual": 12, "branded": 8},
+        "serper_mode": "global_leaders",
+        "allowed_schema_types": [
+            "CollectionPage", "ItemList", "Organization", "WebSite"
+        ],
+        "must_have_signals": [
+            "Search/Filter functionality", "category grouping", "provider listings", "user reviews",
+        ],
+        "scoring_weights": {
+            "technical": 0.50,
+            "content_depth": 0.40,
+            "eeat_trust": 0.10,
+        },
+        "persona_templates": [
+            {"persona": "Shopper / User", "intent": "comparison"},
+            {"persona": "Service Provider", "intent": "visibility"},
+        ],
+        "blind_fallback_templates": {
+            "en": ["best platforms to find services", "compare online vendors", "directory for reviews"],
+            "it": ["migliori piattaforme per trovare servizi", "confronta venditori online", "directory per recensioni"],
+        },
+        "contextual_fallback_templates": {
+            "en": ["how to compare providers online", "best aggregators for comparison"],
+            "it": ["come confrontare fornitori online", "migliori aggregatori per confronto"],
+        },
+    },
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 8. Education / Institution
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "education_institution": {
+        "label": "Education & Institution",
+        "macro_industry": "Education & Training",
+        "geo_behavior": "proximity_or_authority",
+        "query_style": "authoritative_informational",
         "scale_default": "National",
         "location_enforce": True,
-        "stress_test_budget": {"blind": 6, "contextual": 7, "branded": 6},
-        "serper_mode": "regional_leaders",
-        "allowed_schema_types": ["LocalBusiness", "Service", "Organization", "PostalAddress"],
-        "allowed_blueprint_signals": ["technical_expertise", "localized_service_scope", "credentials_visibility"],
+        "stress_test_budget": {"blind": 14, "contextual": 12, "branded": 8},
+        "serper_mode": "local_pack",
+        "allowed_schema_types": [
+            "EducationalOrganization", "Course", "ItemPage", "FAQPage"
+        ],
         "must_have_signals": [
-            "service pages",
-            "case studies",
-            "certifications",
-            "location pages"
+            "Course syllabuses", "accreditation details", "faculty bios", "admissions info",
         ],
-        "risk_factors": [
-            "too generic IT messaging",
-            "no certifications",
-            "no local trust"
-        ],
+        "scoring_weights": {
+            "eeat_trust": 0.50,
+            "content_depth": 0.30,
+            "technical": 0.20,
+        },
         "persona_templates": [
-            {
-                "persona": "Operations Manager",
-                "intent": "provider discovery",
-                "query_types": ["blind", "contextual"],
-                "example_queries": [
-                    "managed IT services Rome",
-                    "cybersecurity provider Lazio"
-                ]
-            },
-            {
-                "persona": "Evaluator",
-                "intent": "validation",
-                "query_types": ["branded"],
-                "example_queries": [
-                    "[company] reviews",
-                    "[company] services Rome"
-                ]
-            }
+            {"persona": "Prospective Student", "intent": "education"},
+            {"persona": "Parent", "intent": "validation"},
         ],
-    }
+        "blind_fallback_templates": {
+            "en": ["best universities for", "top courses on", "where to study"],
+            "it": ["migliori università per", "migliori corsi di", "dove studiare"],
+        },
+        "contextual_fallback_templates": {
+            "en": ["how to apply for colleges", "requirements for studies"],
+            "it": ["come fare domanda per università", "requisiti per studi"],
+        },
+    },
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Legacy Alias Router — prevents KeyError crashes during transition.
+# Maps every retired/transitional key to its canonical successor.
+# DO NOT add new canonical profiles here; add them above.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LEGACY_ALIASES = {
+    # B2B / SaaS variants
+    "b2b_saas":             "b2b_saas_tech",
+    "consumer_saas":        "b2b_saas_tech",
+    "marketplace":          "b2b_saas_tech",
+    "tech":                 "b2b_saas_tech",
+    "software":             "b2b_saas_tech",
+
+    # Local / YMYL variants
+    "local_dentist":        "local_service_ymyl",
+    "local_law_firm":       "local_service_ymyl",
+    "dentist":              "local_service_ymyl",
+    "healthcare":           "local_service_ymyl",
+
+    # E-commerce variants
+    "ecommerce_brand":      "ecommerce_retail",
+    "ecommerce":            "ecommerce_retail",
+    "retail":               "ecommerce_retail",
+
+    # Hospitality variants
+    "restaurant_hospitality": "hospitality_travel",
+    "food":                 "hospitality_travel",
+    "hotel":                "hospitality_travel",
+    "coliving":             "hospitality_travel",
+
+    # Publisher variants
+    "media_blog":           "publisher_media",
+    "blog":                 "publisher_media",
+    "news":                 "publisher_media",
+
+    # Professional Services variants
+    "freelancer_consultant":     "professional_services",
+    "agency_marketing":          "professional_services",
+    "education_course_provider": "professional_services",
+    "local_tech_provider":       "professional_services",
+    "freelancer":                "professional_services",
+    "consulting":                "professional_services",
+}
+
+for _alias, _canonical in _LEGACY_ALIASES.items():
+    BUSINESS_INTELLIGENCE_PROFILES[_alias] = BUSINESS_INTELLIGENCE_PROFILES[_canonical]

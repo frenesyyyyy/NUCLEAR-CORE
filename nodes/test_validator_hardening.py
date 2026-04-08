@@ -5,7 +5,7 @@ from validator_node import process
 def test_full_premium_ready():
     print("--- Test 1: Full Premium Readiness ---")
     state = {
-        "business_profile_key": "b2b_saas",
+        "business_profile_key": "b2b_saas_tech",
         "business_profile_summary": {"label": "B2B SaaS", "must_have_signals": ["A"]},
         "content_engineering": {"rewrite_tasks": ["B"]},
         "schema_recommendations": {"recommended_blocks": ["C"]},

@@ -1,6 +1,6 @@
 import copy
 from rich.console import Console
-from nodes.business_profiles import BUSINESS_INTELLIGENCE_PROFILES
+from nodes.business_profiles import BUSINESS_INTELLIGENCE_PROFILES, DEFAULT_PROFILE_KEY
 from nodes.profile_selector import select_business_profile
 
 console = Console()
@@ -61,7 +61,7 @@ def process(state: dict) -> dict:
                 metadata["evidence"].append("Semantic boundary conflict detected (food/restaurant keywords found on putative legal entity). Legal override was forcefully BLOCKED.")
 
         # 4. Load the profile object safely preventing global template mutation
-        profile = copy.deepcopy(BUSINESS_INTELLIGENCE_PROFILES.get(key, BUSINESS_INTELLIGENCE_PROFILES.get("b2b_saas")))
+        profile = copy.deepcopy(BUSINESS_INTELLIGENCE_PROFILES.get(key, BUSINESS_INTELLIGENCE_PROFILES.get(DEFAULT_PROFILE_KEY)))
         
         # 5. Populate and report
         new_state.update({
@@ -80,10 +80,10 @@ def process(state: dict) -> dict:
         console.log(f"   [green]Classification Complete[/green] | Profile: [cyan]{key}[/cyan] [Reliability: {metadata.get('reliability')}]")
 
     except Exception as e:
-        console.log(f"   [bold red]Classification Error[/bold red] | Using fallback B2B SaaS: {str(e)}")
-        fallback_profile = BUSINESS_INTELLIGENCE_PROFILES.get("b2b_saas")
+        console.log(f"   [bold red]Classification Error[/bold red] | Using fallback: {str(e)}")
+        fallback_profile = BUSINESS_INTELLIGENCE_PROFILES.get(DEFAULT_PROFILE_KEY)
         new_state.update({
-            "business_profile_key": "b2b_saas",
+            "business_profile_key": DEFAULT_PROFILE_KEY,
             "business_profile": fallback_profile,
             "classification_reliability": "low",
             "classification_evidence": [f"Node execution error: {str(e)}"]

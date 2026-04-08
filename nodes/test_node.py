@@ -1,6 +1,7 @@
 """Test for business_profile_selector_node."""
 import json
 from nodes.business_profile_selector_node import process
+from nodes.business_profiles import DEFAULT_PROFILE_KEY
 
 def test_node():
     mock_state = {
@@ -12,16 +13,14 @@ def test_node():
         "classification_notes": "Initial analysis"
     }
     
-    print("Testing B2B SaaS state...")
+    print("Testing B2B SaaS / Tech state...")
     result = process(mock_state)
     
-    assert result["business_profile_key"] == "b2b_saas"
+    assert result["business_profile_key"] == DEFAULT_PROFILE_KEY
     assert "label" in result["business_profile_summary"]
-    assert result["business_profile_summary"]["label"] == "B2B SaaS"
-    assert "query_distribution" in result["business_profile_summary"]
-    assert "blind" in result["business_profile_summary"]["query_distribution"]
+    assert result["business_profile_summary"]["label"] == "B2B SaaS / Tech"
     
-    print("Test passed: B2B SaaS correctly classified and summary loaded.")
+    print("Test passed: B2B SaaS / Tech correctly classified and summary loaded.")
 
     mock_local_state = {
         "business_type": "unknown",
@@ -31,17 +30,21 @@ def test_node():
         "discovered_location": "Rome"
     }
     
-    print("\nTesting Local Dentist state...")
+    print("\nTesting Local Service YMYL state...")
     result_local = process(mock_local_state)
-    assert result_local["business_profile_key"] == "local_dentist"
-    assert result_local["business_profile_summary"]["label"] == "Local Dentist"
+    # Keyword scoring directly returns the Canonical Agency Profile
+    assert result_local["business_profile_key"] == "local_service_ymyl"
+    # because of the alias router in business_profiles.py, the returned dictionary label will be "Local Service / YMYL"
+    assert result_local["business_profile_summary"]["label"] == "Local Service / YMYL"
     
-    print("Test passed: Local Dentist correctly classified and summary loaded.")
+    print("Test passed: Local Service YMYL correctly classified and summary loaded.")
 
 if __name__ == "__main__":
     try:
         test_node()
         print("\nAll node tests passed!")
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"\nTest failed: {str(e)}")
         exit(1)

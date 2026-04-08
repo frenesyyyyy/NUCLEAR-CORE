@@ -23,6 +23,7 @@ from nodes.source_matrix import (
     get_canonical_source_urls
 )
 from nodes.earned_media_node import _FAMILY_TO_LEGACY_BUCKET
+from nodes.business_profiles import DEFAULT_PROFILE_KEY
 
 console = Console()
 
@@ -34,7 +35,7 @@ def _evaluate_trust_mix(
     review_count: int,
     directory_count: int,
     total_sources: int,
-    profile_key: str = "b2b_saas",
+    profile_key: str = DEFAULT_PROFILE_KEY,
     family_breakdown: dict = None,
     source_pack: dict = None,
 ) -> str:
@@ -105,15 +106,15 @@ def _evaluate_citation_risk(
         return risks
 
     # Legacy fallback risk logic (if source_matrix data not available)
-    if profile_key in ("b2b_saas", "consumer_saas", "ecommerce_brand", "marketplace"):
+    if profile_key in ("b2b_saas_tech", "ecommerce_retail", "publisher_media", "b2b_saas", "consumer_saas", "ecommerce_brand", "marketplace"):
         if review_count == 0:
             risks.append("Missing validation: No review platform mentions (G2, Trustpilot, App Store). High risk of exclusion from comparison queries.")
 
-    elif profile_key in ("media_blog", "education_course_provider", "agency_marketing"):
+    elif profile_key in ("media_blog", "education_course_provider", "agency_marketing", "publisher_media", "professional_services"):
         if earned_count == 0:
             risks.append("Authority gap: No editorial/press mentions. High risk for 'best in class' or thought-leadership queries.")
 
-    elif profile_key in ("local_dentist", "local_law_firm", "restaurant_hospitality", "local_tech_provider", "freelancer_consultant"):
+    elif profile_key in ("local_dentist", "local_law_firm", "restaurant_hospitality", "local_tech_provider", "freelancer_consultant", "local_service_ymyl", "hospitality_travel"):
         if review_count == 0 and directory_count == 0:
             risks.append("Local ghost: No local directory or review citations detected. High risk for 'near me' discovery.")
         elif review_count == 0:
@@ -138,7 +139,7 @@ def process(state: dict) -> dict:
 
     earned_media: dict  = state.get("earned_media", {})
     profile: dict       = state.get("business_profile", {})
-    profile_key: str    = state.get("business_profile_key", "b2b_saas")
+    profile_key: str    = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
 
     # ── NEW: Profile-aware source pack data ───────────────────────────────────
     source_pack = get_source_pack(profile_key)

@@ -192,8 +192,8 @@ DOMAIN_FAMILY_MAP: list[tuple[str, str, float]] = [
 
 SOURCE_PACKS: dict[str, dict] = {
 
-    "local_law_firm": {
-        "label": "Local Law Firm",
+    "local_service_ymyl": {
+        "label": "Local YMYL Provider (Legal/Medical)",
         "relevant_families": [
             "official_registries_legal",
             "professional_directories",
@@ -365,7 +365,7 @@ SOURCE_PACKS: dict[str, dict] = {
         }
     },
 
-    "b2b_saas": {
+    "b2b_saas_tech": {
         "label": "B2B SaaS",
         "relevant_families": [
             "software_comparison_ecosystems",
@@ -448,7 +448,7 @@ SOURCE_PACKS: dict[str, dict] = {
         }
     },
 
-    "ecommerce_brand": {
+    "ecommerce_retail": {
         "label": "Ecommerce Brand",
         "relevant_families": [
             "review_ecosystems",
@@ -533,7 +533,7 @@ SOURCE_PACKS: dict[str, dict] = {
         }
     },
 
-    "restaurant_hospitality": {
+    "hospitality_travel": {
         "label": "Restaurant / Hospitality",
         "relevant_families": [
             "review_ecosystems",
@@ -576,7 +576,7 @@ SOURCE_PACKS: dict[str, dict] = {
         }
     },
 
-    "agency_marketing": {
+    "professional_services": {
         "label": "Marketing / Creative Agency",
         "relevant_families": [
             "professional_directories",
@@ -653,7 +653,7 @@ SOURCE_PACKS: dict[str, dict] = {
         }
     },
 
-    "media_blog": {
+    "publisher_media": {
         "label": "Media / Blog / Publisher",
         "relevant_families": [
             "editorial_news_pr",
@@ -691,6 +691,29 @@ SOURCE_PACKS: dict[str, dict] = {
         }
     },
 }
+
+
+
+# ── Canonical Profile Overrides ──
+SOURCE_PACKS["marketplace_aggregator"] = dict(SOURCE_PACKS.get("b2b_saas_tech", {}))
+SOURCE_PACKS["marketplace_aggregator"]["label"] = "Marketplace/Aggregator Platform"
+
+SOURCE_PACKS["education_institution"] = dict(SOURCE_PACKS.get("professional_services", {}))
+SOURCE_PACKS["education_institution"]["label"] = "Educational Institution"
+
+# ── Legacy Map Aliases ──
+SOURCE_PACKS["b2b_saas"] = SOURCE_PACKS["b2b_saas_tech"]
+SOURCE_PACKS["consumer_saas"] = SOURCE_PACKS["b2b_saas_tech"]
+SOURCE_PACKS["ecommerce_brand"] = SOURCE_PACKS["ecommerce_retail"]
+SOURCE_PACKS["marketplace"] = SOURCE_PACKS["marketplace_aggregator"]
+SOURCE_PACKS["local_dentist"] = SOURCE_PACKS["local_service_ymyl"]
+SOURCE_PACKS["local_law_firm"] = SOURCE_PACKS["local_service_ymyl"]
+SOURCE_PACKS["freelancer_consultant"] = SOURCE_PACKS["professional_services"]
+SOURCE_PACKS["agency_marketing"] = SOURCE_PACKS["professional_services"]
+SOURCE_PACKS["education_course_provider"] = SOURCE_PACKS["education_institution"]
+SOURCE_PACKS["media_blog"] = SOURCE_PACKS["publisher_media"]
+SOURCE_PACKS["restaurant_hospitality"] = SOURCE_PACKS["hospitality_travel"]
+SOURCE_PACKS["local_tech_provider"] = SOURCE_PACKS["professional_services"]
 
 # Safe fallbacks for profiles not explicitly mapped
 SOURCE_PACKS["general_local_business"] = {

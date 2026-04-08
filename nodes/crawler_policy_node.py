@@ -10,6 +10,7 @@ All logic is deterministic; no external API calls.
 """
 
 from rich.console import Console
+from nodes.business_profiles import DEFAULT_PROFILE_KEY
 
 console = Console()
 
@@ -57,7 +58,7 @@ BOT_REGISTRY = [
 
 # Profiles where citation/retrieval visibility is critical
 _CITATION_CRITICAL_PROFILES = {
-    "b2b_saas", "consumer_saas", "ecommerce_brand", "marketplace",
+    "b2b_saas_tech", "b2b_saas", "consumer_saas", "ecommerce_brand", "marketplace", "ecommerce_retail",
     "agency_marketing", "education_course_provider", "local_tech_provider",
 }
 
@@ -291,7 +292,7 @@ def process(state: dict) -> dict:
     profile: dict         = state.get("business_profile", {})
     profile_summary: dict = state.get("business_profile_summary", {})
     target_industry: str  = state.get("target_industry", "Unknown")
-    profile_key: str      = state.get("business_profile_key", "b2b_saas")
+    profile_key: str      = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
 
     geo_behavior = profile_summary.get("geo_behavior", profile.get("geo_behavior", "standard_retrieval"))
     label = profile_summary.get("label", profile_key)

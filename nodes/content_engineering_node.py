@@ -1,6 +1,7 @@
 """Workflow node for evaluating content for LLM retrieval and generation."""
 import re
 from rich.console import Console
+from nodes.business_profiles import DEFAULT_PROFILE_KEY
 
 console = Console()
 
@@ -45,7 +46,7 @@ def _evaluate_answer_first(content: str) -> int:
     return max(0, min(100, score))
 
 
-def _evaluate_evidence_density(content: str, profile_key: str = "b2b_saas") -> int:
+def _evaluate_evidence_density(content: str, profile_key: str = DEFAULT_PROFILE_KEY) -> int:
     """Evaluate presence of numbers, stats, dates, entities, and certifications.
        If platform profile, reward transactional and UX tokens instead of pure text density.
     """
@@ -258,7 +259,7 @@ def process(state: dict) -> dict:
         return new_state
         
     # Run heuristics
-    profile_key = state.get("business_profile_key", "b2b_saas")
+    profile_key = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
     
     answer_first_score = _evaluate_answer_first(content)
     evidence_density_score = _evaluate_evidence_density(content, profile_key)

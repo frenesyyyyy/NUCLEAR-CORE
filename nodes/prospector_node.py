@@ -6,6 +6,7 @@ import requests
 from rich.console import Console
 from google import genai
 from nodes.api_utils import execute_with_backoff
+from nodes.business_profiles import DEFAULT_PROFILE_KEY
 
 console = Console()
 
@@ -271,7 +272,7 @@ def process(state: dict) -> dict:
                 f"{b_name} rider recensioni",
                 f"{b_name} partner ristoranti"
             ]
-        elif p_key in ("b2b_saas", "consumer_saas", "local_tech_provider"):
+        elif p_key in ("b2b_saas_tech", "b2b_saas", "consumer_saas", "local_tech_provider", "professional_services"):
             return [
                 f"{b_name} g2",
                 f"{b_name} capterra",

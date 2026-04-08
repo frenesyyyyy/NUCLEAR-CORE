@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from typing import Any
 from rich.console import Console
 
+from nodes.business_profiles import DEFAULT_PROFILE_KEY
 from nodes.source_matrix import (
     classify_url_to_family,
     compute_profile_aware_strength,
@@ -297,7 +298,7 @@ def process(state: dict) -> dict:
     raw_data: dict         = state.get("raw_data_complete", {})
     external_sources_raw: list = state.get("external_sources_raw", [])
     url: str               = state.get("url", "")
-    profile_key: str       = state.get("business_profile_key", "b2b_saas")
+    profile_key: str       = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
 
     brand_domain = _infer_brand_domain(url)
 
@@ -307,6 +308,15 @@ def process(state: dict) -> dict:
 
     all_source_urls = get_canonical_source_urls(state)
 
+    # ── Site Evidence Validation ─────────────────────────────────────────────
+    inferred_family_dict = infer_families_from_site_evidence(
+        state.get("client_content_clean", ""),
+        state.get("og_tags", {}),
+        state.get("json_ld_blocks", []),
+        state.get("client_content_raw", "")
+    )
+    first_party_inferred = [{"family": f, "tag": "first_party", "confidence": data["confidence"]} for f, data in inferred_family_dict.items()]
+
     console.print(f"  Brand: [cyan]{brand_name}[/cyan] | Profile: [yellow]{profile_key}[/yellow] | Sources: [yellow]{len(all_source_urls)}[/yellow]")
 
     # ── Classify each source URL ─────────────────────────────────────────────
@@ -315,6 +325,7 @@ def process(state: dict) -> dict:
         "review": 0, "editorial": 0, "forum": 0,
         "directory": 0, "owned": 0, "unknown": 0,
     }
+    family_breakdown: dict[str, int] = {}
     negative_count = 0
 
     for src_url in all_source_urls:
@@ -323,6 +334,9 @@ def process(state: dict) -> dict:
 
         bucket = _classify_url(src_url, brand_domain)
         source_breakdown[bucket] = source_breakdown.get(bucket, 0) + 1
+
+        family, _ = classify_url_to_family(src_url, brand_domain)
+        family_breakdown[family] = family_breakdown.get(family, 0) + 1
 
         has_neg = _has_negative_signals(src_url)
         if has_neg:
@@ -340,6 +354,7 @@ def process(state: dict) -> dict:
 
     total = len(mentions)
     strength = _compute_strength_score(source_breakdown, total)
+    profile_aware_strength = compute_profile_aware_strength(family_breakdown, pack_weights, total)
     rep_risk = _compute_reputation_risk_score(negative_count, source_breakdown.get("review", 0), total)
     warning_effect = negative_count > 0 and (negative_count / max(total, 1)) >= 0.10
 
@@ -361,10 +376,12 @@ def process(state: dict) -> dict:
 
     state["earned_media"] = {
         "strength_score": strength,
+        "profile_aware_strength": profile_aware_strength,
         "reputation_risk_score": rep_risk,
         "warning_effect_risk": warning_effect,
         "mentions": mentions,
         "source_breakdown": source_breakdown,
+        "first_party_inferred_families": first_party_inferred,
         "notes": notes,
     }
 

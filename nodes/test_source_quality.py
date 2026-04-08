@@ -6,7 +6,7 @@ def test_no_sources():
     print("--- Test 1: No sources ---")
     state = {
         "earned_media": {},
-        "business_profile_key": "b2b_saas",
+        "business_profile_key": "b2b_saas_tech",
     }
     result = process(state)
     sq = result["source_taxonomy"]
@@ -25,7 +25,7 @@ def test_b2b_saas_missing_reviews():
                 "directory": 1,
             }
         },
-        "business_profile_key": "b2b_saas",
+        "business_profile_key": "b2b_saas_tech",
     }
     result = process(state)
     sq = result["source_taxonomy"]

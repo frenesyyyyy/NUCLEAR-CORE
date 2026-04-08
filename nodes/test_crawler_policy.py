@@ -9,7 +9,7 @@ def test_b2b_saas_no_robots():
         "url": "https://acme-crm.com",
         "business_profile": {"geo_behavior": "authority_driven"},
         "business_profile_summary": {"label": "B2B SaaS", "geo_behavior": "authority_driven"},
-        "business_profile_key": "b2b_saas",
+        "business_profile_key": "b2b_saas_tech",
         "target_industry": "CRM Software",
     }
     result = process(state)
@@ -18,7 +18,7 @@ def test_b2b_saas_no_robots():
     assert len(cp["bot_matrix"]) == 5
     # B2B SaaS: all bots should be allowed (citation-critical)
     for bot in cp["bot_matrix"]:
-        assert bot["recommended"] == "Allow", f"{bot['bot']} should be Allow for b2b_saas"
+        assert bot["recommended"] == "Allow", f"{bot['bot']} should be Allow for b2b_saas_tech"
     assert "not_found" in cp["crawl_risk_notes"][0].lower() or "no robots" in cp["crawl_risk_notes"][0].lower()
     print(f"  Bot matrix: {len(cp['bot_matrix'])} bots")
     print(f"  Risk notes: {cp['crawl_risk_notes'][0][:60]}...")
@@ -75,7 +75,7 @@ def test_robots_txt_output():
         "url": "https://example.com",
         "business_profile": {},
         "business_profile_summary": {"label": "B2B SaaS", "geo_behavior": "authority_driven"},
-        "business_profile_key": "b2b_saas",
+        "business_profile_key": "b2b_saas_tech",
         "target_industry": "SaaS",
     }
     result = process(state)

@@ -43,20 +43,18 @@ def parse_args():
     parser = argparse.ArgumentParser(description="NUCLEAR AI GEO Optimizer v4.5 Agency-Grade")
     parser.add_argument("--url", required=True, help="Target website URL")
     parser.add_argument("--locale", required=True, choices=["en", "it"], help="Locale (en or it)")
-    parser.add_argument("--typo", "--type", choices=["tech", "food", "freelancer", "dentist"], default="tech", help="Business type for geo-targeting")
     parser.add_argument("--runner", choices=["legacy", "hybrid"], default="legacy", help="Execution runner")
     parser.add_argument("--run-mode", choices=["lite", "standard", "agency"], default="standard", help="Hybrid runner mode")
     args = parser.parse_args()
     return args
 
-def initialize_state(url: str, locale: str, business_type: str) -> dict:
+def initialize_state(url: str, locale: str) -> dict:
     """Initialize the exact state dictionary per the contract."""
     return {
         "run_id": str(uuid.uuid4()),
         "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "url": url,
         "locale": locale,
-        "business_type": business_type,
         "audit_integrity_status": "valid",
         "audit_integrity_reasons": [],
         "status": "initialized"
@@ -87,8 +85,8 @@ def run_pipeline(state: dict) -> dict:
         sys.exit(1)
 
     nodes = [
-        ("Orchestrator Node", orchestrator_process),
         ("Content Fetcher Node", content_fetcher_process),
+        ("Orchestrator Node", orchestrator_process),
         ("Prospector Node", prospector_process),
         ("Business Profile Selector Node", business_profile_selector_process),
         ("Content Strategist Node", content_strategist_process),
@@ -128,7 +126,7 @@ def run_pipeline(state: dict) -> dict:
 def main():
     bootstrap_environment()
     args = parse_args()
-    state = initialize_state(args.url, args.locale, args.typo)
+    state = initialize_state(args.url, args.locale)
 
     console.print(
         f"Starting pipeline for URL: [bold yellow]{args.url}[/bold yellow] | "

@@ -92,8 +92,8 @@ def run_hybrid_pipeline(initial_state: dict, run_mode: str = "standard") -> dict
     state = deepcopy(initial_state)
 
     truth_spine = [
-        "orchestrator",
         "content_fetcher",
+        "orchestrator",
         "prospector",
         "business_profile_selector",
     ]

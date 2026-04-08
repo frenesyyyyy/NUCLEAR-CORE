@@ -10,6 +10,7 @@ import json
 import re
 from typing import Any
 from rich.console import Console
+from nodes.business_profiles import DEFAULT_PROFILE_KEY
 
 console = Console()
 
@@ -18,71 +19,56 @@ console = Console()
 # ─────────────────────────────────────────────────────────────────────────────
 
 PROFILE_SCHEMA_MAP: dict[str, list[dict[str, str]]] = {
-    "b2b_saas": [
+    "b2b_saas_tech": [
         {"schema_type": "Organization",        "page_type": "Homepage",     "rationale": "Establishes core brand entity for AI Knowledge Graph inclusion."},
         {"schema_type": "SoftwareApplication",  "page_type": "Product Pages","rationale": "Critical for appearing in AI 'Best Tools' and feature-comparison answers."},
         {"schema_type": "FAQPage",              "page_type": "FAQ / Support","rationale": "Optimizes for direct-answer extraction on technical and pricing queries."},
         {"schema_type": "WebSite",              "page_type": "Homepage",     "rationale": "Enables sitelinks and brand search actions in AI search snapshots."},
     ],
-    "consumer_saas": [
-        {"schema_type": "SoftwareApplication",  "page_type": "Product Pages","rationale": "Maps the app entity to user-intent discovery queries."},
-        {"schema_type": "FAQPage",              "page_type": "Help Center",  "rationale": "Supports direct-answer retrieval for 'How-to' and feature questions."},
-        {"schema_type": "Organization",         "page_type": "About Page",   "rationale": "Primary trust anchor for brand validation and safety checks."},
+    "local_service_ymyl": [
+        {"schema_type": "LocalBusiness",        "page_type": "Location Pages","rationale": "Geo-anchors the practice for neighborhood-specific local visibility."},
+        {"schema_type": "Person",               "page_type": "Bio/Team",      "rationale": "Maps practitioners to build topical authority and personal brand trust."},
+        {"schema_type": "FAQPage",              "page_type": "Service Pages", "rationale": "Tied to emergency and treatment-specific direct-answer queries."},
+        {"schema_type": "PostalAddress",        "page_type": "Contact",       "rationale": "Crucial for localization in physical reality searches."},
     ],
-    "ecommerce_brand": [
+    "ecommerce_retail": [
         {"schema_type": "Product",              "page_type": "Product Pages","rationale": "Base requirement for AI visibility in product-specific shopping intent queries."},
-        {"schema_type": "AggregateOffer",        "page_type": "Product Pages","rationale": "Powers price-range and multi-item comparison visibility in AI answers."},
-        {"schema_type": "BreadcrumbList",        "page_type": "Collections",  "rationale": "Categorizes the brand hierarchy for broader category-intent discovery."},
+        {"schema_type": "AggregateOffer",       "page_type": "Product Pages","rationale": "Powers price-range and multi-item comparison visibility in AI answers."},
+        {"schema_type": "Review",               "page_type": "Product Pages","rationale": "Builds trust points for product conversion validation."},
         {"schema_type": "Organization",         "page_type": "Homepage",     "rationale": "Ensures brand recognition during direct comparisons with competitors."},
     ],
-    "marketplace": [
-        {"schema_type": "Organization",         "page_type": "Homepage",     "rationale": "Identity anchor for two-sided supply/demand discovery queries."},
-        {"schema_type": "FAQPage",              "page_type": "Safety/Help",  "rationale": "Addresses trust and logistics queries for both buyers and sellers."},
-        {"schema_type": "WebSite",              "page_type": "Homepage",     "rationale": "Optimizes platform discovery and sitelink search behavior."},
+    "hospitality_travel": [
+        {"schema_type": "Restaurant",           "page_type": "Homepage",     "rationale": "Core entity for dining intent; allows direct menu and booking visibility."},
+        {"schema_type": "Menu",                 "page_type": "Menu Pages",   "rationale": "Directly enables AI answers about specific dishes, prices, and dietary info."},
+        {"schema_type": "LocalBusiness",        "page_type": "Homepage",     "rationale": "Important for nearby/discovery local queries without specific cuisine."},
+        {"schema_type": "OpeningHoursSpecification", "page_type": "Contact/Footer", "rationale": "Addresses practical planning intent instantly."},
     ],
-    "local_dentist": [
-        {"schema_type": "Dentist",              "page_type": "Homepage",     "rationale": "Primary healthcare entity; essential for 'dentist near me' local discovery."},
-        {"schema_type": "LocalBusiness",         "page_type": "Location Pages","rationale": "Geo-anchors the practice for neighborhood-specific local visibility."},
-        {"schema_type": "FAQPage",              "page_type": "Service Pages","rationale": "Tied to emergency and treatment-specific direct-answer queries."},
-        {"schema_type": "MedicalOrganization",   "page_type": "About/Team",   "rationale": "Establishes professional medical authority and doctor entity profiles."},
-    ],
-    "local_law_firm": [
-        {"schema_type": "LegalService",          "page_type": "Homepage",     "rationale": "Main industry entity; critical for high-value legal discovery queries."},
-        {"schema_type": "LocalBusiness",         "page_type": "Contact Page", "rationale": "Hardens geo-location signals for local 'lawyer in [city]' searches."},
-        {"schema_type": "Person",                "page_type": "Attorney Bios","rationale": "Maps individual lawyers to build topical authority and personal brand trust."},
-        {"schema_type": "FAQPage",              "page_type": "Practice Areas","rationale": "Captures long-tail informational legal queries in AI response windows."},
-    ],
-    "freelancer_consultant": [
-        {"schema_type": "Person",                "page_type": "Homepage",     "rationale": "Primary entity anchor for personal expertise and named-consultant discovery."},
-        {"schema_type": "Service",               "page_type": "Service Pages","rationale": "Explicitly maps specific expertise areas for niche intent matching."},
-        {"schema_type": "FAQPage",              "page_type": "Homepage",     "rationale": "Answers process and pricing questions directly in AI search snapshots."},
-    ],
-    "agency_marketing": [
-        {"schema_type": "Organization",         "page_type": "Homepage",     "rationale": "Brand identity anchor for agency-level authority and reputation."},
-        {"schema_type": "Service",               "page_type": "Solution Pages","rationale": "Powers visibility for specialized services like 'SaaS SEO' or 'B2B Ads'."},
-        {"schema_type": "Person",                "page_type": "Team Page",    "rationale": "Authoritative signal linking expertise to specific senior team members."},
-    ],
-    "education_course_provider": [
-        {"schema_type": "Course",                "page_type": "Course Pages", "rationale": "Essential for appearing in 'best courses for [topic]' discovery queries."},
-        {"schema_type": "Organization",         "page_type": "About/Contact","rationale": "Validates the educational entity for trustworthiness and accreditation."},
-        {"schema_type": "FAQPage",              "page_type": "Admission FAQ","rationale": "Supports conversion-intent queries about outcomes and prerequisites."},
-    ],
-    "media_blog": [
+    "publisher_media": [
         {"schema_type": "Article",               "page_type": "Article Pages","rationale": "Enables quote-level citation and reference listing in AI search answers."},
+        {"schema_type": "NewsArticle",           "page_type": "Article Pages","rationale": "Prioritizes fresh event-driven knowledge components."},
         {"schema_type": "Person",                "page_type": "Author Bio",   "rationale": "Builds author-level E-E-A-T and topical authority for deep-dive queries."},
-        {"schema_type": "WebSite",              "page_type": "Homepage",     "rationale": "Publication identity and site-wide authority signal."},
+        {"schema_type": "BlogPosting",           "page_type": "Article Pages","rationale": "Semantic indicator for long form content grouping."},
     ],
-    "restaurant_hospitality": [
-        {"schema_type": "Restaurant",            "page_type": "Homepage",     "rationale": "Core entity for dining intent; allows direct menu and booking visibility."},
-        {"schema_type": "Menu",                  "page_type": "Menu Pages",   "rationale": "Directly enables AI answers about specific dishes, prices, and dietary info."},
-        {"schema_type": "FAQPage",              "page_type": "Booking/Help", "rationale": "Answers questions about reservations and private events instantly."},
-    ],
-    "local_tech_provider": [
-        {"schema_type": "Organization",         "page_type": "Homepage",     "rationale": "Regional brand anchor for IT provider recognition and trust."},
-        {"schema_type": "Service",               "page_type": "Managed IT",   "rationale": "Maps niche service capabilities for geo-qualified technical queries."},
-        {"schema_type": "LocalBusiness",         "page_type": "Contact/Global","rationale": "Ensures local discovery for 'IT support near me' type intents."},
-    ],
+    "professional_services": [
+        {"schema_type": "Organization",         "page_type": "Homepage",     "rationale": "Brand identity anchor for agency-level authority and reputation."},
+        {"schema_type": "Service",              "page_type": "Solution Pages","rationale": "Powers visibility for specialized services like 'SaaS SEO' or 'B2B Ads'."},
+        {"schema_type": "Person",               "page_type": "Team Page",    "rationale": "Authoritative signal linking expertise to specific senior team members."},
+    ]
 }
+
+# Legacy Map Aliases
+PROFILE_SCHEMA_MAP["b2b_saas"] = PROFILE_SCHEMA_MAP["b2b_saas_tech"]
+PROFILE_SCHEMA_MAP["consumer_saas"] = PROFILE_SCHEMA_MAP["b2b_saas_tech"]
+PROFILE_SCHEMA_MAP["ecommerce_brand"] = PROFILE_SCHEMA_MAP["ecommerce_retail"]
+PROFILE_SCHEMA_MAP["marketplace"] = PROFILE_SCHEMA_MAP["b2b_saas_tech"]
+PROFILE_SCHEMA_MAP["local_dentist"] = PROFILE_SCHEMA_MAP["local_service_ymyl"]
+PROFILE_SCHEMA_MAP["local_law_firm"] = PROFILE_SCHEMA_MAP["local_service_ymyl"]
+PROFILE_SCHEMA_MAP["freelancer_consultant"] = PROFILE_SCHEMA_MAP["professional_services"]
+PROFILE_SCHEMA_MAP["agency_marketing"] = PROFILE_SCHEMA_MAP["professional_services"]
+PROFILE_SCHEMA_MAP["education_course_provider"] = PROFILE_SCHEMA_MAP["professional_services"]
+PROFILE_SCHEMA_MAP["media_blog"] = PROFILE_SCHEMA_MAP["publisher_media"]
+PROFILE_SCHEMA_MAP["restaurant_hospitality"] = PROFILE_SCHEMA_MAP["hospitality_travel"]
+PROFILE_SCHEMA_MAP["local_tech_provider"] = PROFILE_SCHEMA_MAP["professional_services"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -248,7 +234,7 @@ def process(state: dict) -> dict:
     url: str              = state.get("url", "https://example.com")
     page_title: str       = state.get("page_title", "")
     meta_description: str = state.get("meta_description", "")
-    profile_key: str      = state.get("business_profile_key", "b2b_saas")
+    profile_key: str      = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
     
     # Audit Integrity Context
     integrity_status = state.get("audit_integrity_status", "valid")
@@ -257,7 +243,7 @@ def process(state: dict) -> dict:
     detected_types = _normalize_schema_keys(schema_counts)
     
     # Get blueprint/specs for this profile
-    required_specs = PROFILE_SCHEMA_MAP.get(profile_key, PROFILE_SCHEMA_MAP["b2b_saas"])
+    required_specs = PROFILE_SCHEMA_MAP.get(profile_key, PROFILE_SCHEMA_MAP[DEFAULT_PROFILE_KEY])
 
     # Determine what is missing, with SAFETY GATING
     missing_types: list[str] = []

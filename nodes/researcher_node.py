@@ -13,6 +13,7 @@ from rich.console import Console
 from typing import Any
 from google import genai
 from nodes.api_utils import execute_with_backoff
+from nodes.business_profiles import DEFAULT_PROFILE_KEY
 
 console = Console()
 
@@ -41,6 +42,51 @@ def _safe_stringify_list(items: list[Any]) -> list[str]:
             val = str(item).strip()
             if val: safe.append(val)
     return safe
+
+
+def _sanitize_location(raw: str) -> str:
+    """
+    Universal location sanitizer — prevents string interpolation bugs
+    in downstream prompts and query builders.
+
+    Handles:
+      - Leading/trailing commas and whitespace
+      - Collapsed multiple separators (e.g. ', , ' -> ', ')
+      - Garbage patterns like 'a , Italia Roma'
+      - Empty, None, or placeholder values
+
+    Returns a clean location string or '' if invalid.
+    """
+    if not raw or not isinstance(raw, str):
+        return ""
+
+    loc = raw.strip()
+
+    # Strip out any text inside parentheses
+    loc = re.sub(r'\(.*?\)', '', loc)
+
+    # Strip leading/trailing commas and spaces before splitting
+    loc = loc.strip(", ")
+
+    # Split by comma and keep only the first item
+    loc = loc.split(',')[0]
+
+    # Collapse multiple spaces
+    loc = re.sub(r'\s{2,}', ' ', loc)
+
+    # Final trim
+    loc = loc.strip()
+
+    # Reject known placeholders
+    if loc.lower() in {"none", "n/a", "unknown", "unavailable", "worldwide", "national", ""}:
+        return ""
+
+    # Reject if result is a single character or pure punctuation
+    if len(loc) < 2 or not any(c.isalpha() for c in loc):
+        return ""
+
+    return loc
+
 
 def _extract_brand_tokens(brand_name: str, url: str, og_title: str) -> set[str]:
     """
@@ -174,7 +220,8 @@ def _build_blind_queries(
     location: str,
     locale: str,
     gemini_client,
-    budget: int = 8
+    budget: int = 8,
+    service_zones: list = None
 ) -> list:
     """
     Tier 1: Blind Discovery.
@@ -186,14 +233,23 @@ def _build_blind_queries(
     queries = []
     if seeds:
         try:
+            geo_rule = "\n            6. GEOGRAPHIC ENFORCEMENT: If 'service_zones' are provided, append ONE of the zones naturally (e.g., 'a Milano'). Otherwise, do not append any macro country location."
+
+            geo_isolation = ""
+            if service_zones:
+                geo_isolation = f"\n            7. GEOGRAPHIC MUTUAL EXCLUSION RULE:\n            You have a Macro Location ({location}) and Micro Zones ({service_zones}).\n            - When generating a local query, you MUST pick exactly ONE Micro Zone (e.g., 'Milano'). \n            - IF you use a Micro Zone, you MUST NOT append the Macro Location. \n            - Example GOOD: 'miglior medico generico a Milano'\n            - Example BAD: 'miglior medico generico a Milano Italy'\n            - All queries must be in flawless, conversational {lang_name}. NEVER append 'Italy' to an Italian local query."
+
+            lang_rule = f"Language: {lang_name}. All queries must be written in perfectly natural, conversational {lang_name} (or the target locale). DO NOT append the English word 'Italy' to an Italian query. Phrasing must exactly mimic how a real human types into Google or Perplexity."
+
             prompt = f"""
             Convert these market identifiers/FAQs into {budget} truly BLIND discovery queries.
             RULES:
             1. NO brand names, NO domain tokens, NO company specific IDs.
             2. Focus on "best [category]", "how to [problem]", "[category] platform".
             3. Must sound like a real user who DOES NOT know the brand exists.
-            4. Language: {lang_name}.
-            5. Output ONLY a JSON array of strings: ["query1", "query2", ...]
+            4. {lang_rule}
+            5. Output ONLY a JSON array of strings: ["query1", "query2", ...]{geo_rule}{geo_isolation}
+            8. LOCATION FORMAT: When appending geographical locations to queries, use natural local prepositions (e.g., 'in [Location]', 'near [Location]', 'a [Location]' for Italian). NEVER output raw concatenated comma-separated strings like 'a , Italia Roma'.
             
             Seeds: {json.dumps(seeds)}
             """
@@ -206,6 +262,7 @@ def _build_blind_queries(
             if isinstance(raw_qs, dict): raw_qs = raw_qs.get("queries", [])
             
             for q in raw_qs:
+                if not isinstance(q, str): continue
                 sanitized, reason = _sanitize_or_reject_query(q, "blind_discovery", brand_tokens, is_local, location, locale, industry="market")
                 if sanitized:
                     queries.append({"query": sanitized, "tier": "blind_discovery", "points": 25})
@@ -222,7 +279,8 @@ def _build_contextual_queries(
     locale: str,
     gemini_client,
     budget: int = 10,
-    persona_templates: list = None
+    persona_templates: list = None,
+    service_zones: list = None
 ) -> list:
     """
     Tier 2: Contextual Discovery.
@@ -239,14 +297,23 @@ def _build_contextual_queries(
             pt_list = [f"{p.get('persona', '')} ({p.get('intent', '')})" for p in persona_templates if p.get('persona')]
             persona_context = f"\nPersonas: {', '.join(pt_list)}."
 
+        geo_rule = "\n        6. GEOGRAPHIC ENFORCEMENT: If 'service_zones' are provided, append ONE of the zones naturally (e.g., 'a Milano'). Otherwise, do not append any macro country location."
+
+        geo_isolation = ""
+        if service_zones:
+            geo_isolation = f"\n        7. GEOGRAPHIC MUTUAL EXCLUSION RULE:\n        You have a Macro Location ({location}) and Micro Zones ({service_zones}).\n        - When generating a local query, you MUST pick exactly ONE Micro Zone (e.g., 'Milano'). \n        - IF you use a Micro Zone, you MUST NOT append the Macro Location. \n        - Example GOOD: 'miglior medico generico a Milano'\n        - Example BAD: 'miglior medico generico a Milano Italy'\n        - All queries must be in flawless, conversational {lang_name}. NEVER append 'Italy' to an Italian local query."
+
+        lang_rule = f"Language: {lang_name}. All queries must be written in perfectly natural, conversational {lang_name} (or the target locale). DO NOT append the English word 'Italy' to an Italian query. Phrasing must exactly mimic how a real human types into Google or Perplexity."
+
         prompt = f"""
         Convert these content gaps into {len(gaps)} brand-neutral search queries.
         RULES:
         1. STRICTLY FORBIDDEN: Naming the audited brand or its website.
         2. Allowed: Category, use case, budget, geography.
         3. NO investor/analyst phrasing. Sound like a user search.
-        4. Language: {lang_name}.{persona_context}
-        5. Output ONLY JSON: {{"questions": ["...", "..."]}}
+        4. {lang_rule}{persona_context}
+        5. Output ONLY JSON: {{"questions": ["...", "..."]}}{geo_rule}{geo_isolation}
+        8. LOCATION FORMAT: When appending geographical locations to contextual queries, use natural local prepositions (e.g., 'in [Location]', 'near [Location]', 'a [Location]' for Italian). NEVER output raw concatenated comma-separated strings like 'a , Italia Roma'.
         
         Gaps: {json.dumps(gaps)}
         """
@@ -259,6 +326,7 @@ def _build_contextual_queries(
         
         queries = []
         for q in questions:
+            if not isinstance(q, str): continue
             sanitized, reason = _sanitize_or_reject_query(q, "contextual_discovery", brand_tokens, is_local, location, locale)
             if sanitized:
                 queries.append({"query": sanitized, "tier": "contextual_discovery", "points": 15})
@@ -459,7 +527,7 @@ def _run_stress_test(
                 tier_stats[tier]["pts"] += pts
                 console.print(f"    [green]✓ MATCH ({pts}pts)[/green]")
             else:
-                console.print(f"    [yellow]✗ no match[/yellow]")
+                console.print(f"    [yellow][X] no match[/yellow]")
         except Exception as qe:
             console.print(f"    [yellow]Query error: {qe}[/yellow]")
 
@@ -494,7 +562,8 @@ def process(state: dict) -> dict:
     brand_name = state.get("brand_name", "Unknown")
     scale_level = state.get("scale_level", "National")
     business_type = state.get("business_type", "tech")
-    discovered_location = state.get("discovered_location", "Worldwide")
+    discovered_location = _sanitize_location(state.get("discovered_location", "")) or "Worldwide"
+    service_zones = state.get("service_zones", [])
     lang_name = "Italian" if locale == "it" else "English"
     
     # ── Audit Integrity Gating v4.5 ─────────────────────────────────────────────
@@ -682,8 +751,8 @@ def process(state: dict) -> dict:
 
         # Query Generation
         loc_conf = state.get("location_confidence", "high")
-        t1_raw = _build_blind_queries(faq_patterns_st, authority_ents_st, brand_tokens, is_local, discovered_location, locale, gemini_client_st, STRESS_TEST_BUDGET["blind"])
-        t2_raw = _build_contextual_queries(topic_gaps_st, brand_tokens, is_local, discovered_location, locale, gemini_client_st, STRESS_TEST_BUDGET["contextual"], state.get("business_profile", {}).get("persona_templates", []))
+        t1_raw = _build_blind_queries(faq_patterns_st, authority_ents_st, brand_tokens, is_local, discovered_location, locale, gemini_client_st, STRESS_TEST_BUDGET["blind"], service_zones)
+        t2_raw = _build_contextual_queries(topic_gaps_st, brand_tokens, is_local, discovered_location, locale, gemini_client_st, STRESS_TEST_BUDGET["contextual"], state.get("business_profile", {}).get("persona_templates", []), service_zones)
         
         # Patch query calls to include location_confidence
         for q_obj in t1_raw:
@@ -703,6 +772,16 @@ def process(state: dict) -> dict:
         # ── FAIL-SAFE LINT GATE & BACKFILL ─────────────────────────────────────
         t1_queries = [q for q in t1_raw if q.get("query")]
         t2_queries = [q for q in t2_raw if q.get("query")]
+
+        # HARD PYTHON POST-PROCESSOR FOR STRIPPING LOCATION LEAKAGE & SYNTAX ARTIFACTS
+        for q_list in [t1_queries, t2_queries, t3_queries]:
+            for q_obj in q_list:
+                q_text = q_obj.get("query", "")
+                if isinstance(q_text, str):
+                    q_text = q_text.replace(" Italy", "").replace(" Italia", "").replace("Italy", "")
+                    q_text = re.sub(r'^[\,\-\.]+\s*', '', q_text)
+                    q_text = re.sub(r'\s+', ' ', q_text).strip()
+                    q_obj["query"] = q_text
 
         t1_fallback_count = 0
         t2_fallback_count = 0
@@ -850,6 +929,12 @@ def process(state: dict) -> dict:
         except Exception as e:
             eg_score = 30.0 # conservative fallback
             
+        PLATFORM_LIKE_PROFILES = {"marketplace", "consumer_saas", "ecommerce_brand"}
+        profile_key = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
+        if profile_key in PLATFORM_LIKE_PROFILES:
+            upstream_density = state.get("content_engineering", {}).get("evidence_density_score", 0)
+            eg_score = max(eg_score, float(upstream_density))
+
         metrics["Defensible Evidence Depth"] = int(min(100, max(0, eg_score)))
 
         # 6. FINAL VISIBILITY & HALLUCINATION RISK

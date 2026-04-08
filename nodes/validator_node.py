@@ -1,4 +1,5 @@
 from rich.console import Console
+from nodes.business_profiles import DEFAULT_PROFILE_KEY
 
 console = Console()
 
@@ -58,7 +59,11 @@ def _compute_data_confidence(state: dict) -> int:
     elif extraction_quality == "low": score += 10
     
     # Citations
-    citations = taxonomy.get("owned_count", 0) + taxonomy.get("earned_count", 0) + taxonomy.get("review_count", 0) + taxonomy.get("directory_count", 0)
+    inferred_families = state.get("earned_media", {}).get("first_party_inferred_families", [])
+    qualifying_inferred_count = sum(1 for f in inferred_families if f.get("confidence") in {"medium", "high"})
+    inferred_credit = min(6, qualifying_inferred_count * 2)
+    
+    citations = taxonomy.get("owned_count", 0) + taxonomy.get("earned_count", 0) + taxonomy.get("review_count", 0) + taxonomy.get("directory_count", 0) + inferred_credit
     if citations > 15: score += 30
     elif citations > 5: score += 15
     elif citations > 0: score += 5
@@ -103,7 +108,7 @@ def _compute_verdict(state: dict) -> tuple[str, str]:
         return "NOT CLIENT READY", "Brand has absolute zero discovery visibility. Fundamental positioning failure."
 
     PLATFORM_PROFILES = {"marketplace", "consumer_saas", "ecommerce_brand"}
-    profile_key = state.get("business_profile_key", "b2b_saas")
+    profile_key = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
     
     # Profile-aware requirement thresholds
     min_evidence_depth = 20 if profile_key in PLATFORM_PROFILES else 30

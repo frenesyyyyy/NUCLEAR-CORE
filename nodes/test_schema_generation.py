@@ -8,7 +8,7 @@ def test_b2b_saas_missing_all():
         "schema_type_counts": {},
         "json_ld_blocks": [],
         "target_industry": "CRM Software",
-        "business_profile_key": "b2b_saas",
+        "business_profile_key": "b2b_saas_tech",
         "url": "https://example-saas.com",
         "page_title": "Acme CRM",
         "meta_description": "Modern CRM.",
