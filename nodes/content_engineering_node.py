@@ -1,7 +1,7 @@
 """Workflow node for evaluating content for LLM retrieval and generation."""
 import re
 from rich.console import Console
-from nodes.business_profiles import DEFAULT_PROFILE_KEY
+from nodes.business_profiles import DEFAULT_PROFILE_KEY, get_platform_like_profiles, normalize_profile_key
 
 console = Console()
 
@@ -50,7 +50,8 @@ def _evaluate_evidence_density(content: str, profile_key: str = DEFAULT_PROFILE_
     """Evaluate presence of numbers, stats, dates, entities, and certifications.
        If platform profile, reward transactional and UX tokens instead of pure text density.
     """
-    PLATFORM_PROFILES = {"marketplace", "consumer_saas", "ecommerce_brand"}
+    PLATFORM_PROFILES = get_platform_like_profiles()
+    profile_key = normalize_profile_key(profile_key)
     score = 30
     content_lower = content.lower()
     

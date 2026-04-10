@@ -10,7 +10,7 @@ import json
 import re
 from typing import Any
 from rich.console import Console
-from nodes.business_profiles import DEFAULT_PROFILE_KEY
+from nodes.business_profiles import DEFAULT_PROFILE_KEY, normalize_profile_key
 
 console = Console()
 
@@ -25,11 +25,16 @@ PROFILE_SCHEMA_MAP: dict[str, list[dict[str, str]]] = {
         {"schema_type": "FAQPage",              "page_type": "FAQ / Support","rationale": "Optimizes for direct-answer extraction on technical and pricing queries."},
         {"schema_type": "WebSite",              "page_type": "Homepage",     "rationale": "Enables sitelinks and brand search actions in AI search snapshots."},
     ],
-    "local_service_ymyl": [
-        {"schema_type": "LocalBusiness",        "page_type": "Location Pages","rationale": "Geo-anchors the practice for neighborhood-specific local visibility."},
-        {"schema_type": "Person",               "page_type": "Bio/Team",      "rationale": "Maps practitioners to build topical authority and personal brand trust."},
+    "local_healthcare_ymyl": [
+        {"schema_type": "MedicalBusiness",      "page_type": "Location Pages","rationale": "Geo-anchors the practice for neighborhood-specific local visibility."},
+        {"schema_type": "Physician",            "page_type": "Bio/Team",      "rationale": "Maps practitioners to build topical authority and personal brand trust."},
+        {"schema_type": "LocalBusiness",        "page_type": "Location Pages","rationale": "Strengthens baseline visibility for geographic areas."},
         {"schema_type": "FAQPage",              "page_type": "Service Pages", "rationale": "Tied to emergency and treatment-specific direct-answer queries."},
-        {"schema_type": "PostalAddress",        "page_type": "Contact",       "rationale": "Crucial for localization in physical reality searches."},
+    ],
+    "local_legal_ymyl": [
+        {"schema_type": "LegalService",         "page_type": "Location Pages","rationale": "Geo-anchors the legal practice for local visibility."},
+        {"schema_type": "Person",               "page_type": "Bio/Team",      "rationale": "Builds trust and establishes individual attorney credentials."},
+        {"schema_type": "Organization",         "page_type": "Homepage",      "rationale": "Establishes law firm entity for knowledge graph and brand authority."},
     ],
     "ecommerce_retail": [
         {"schema_type": "Product",              "page_type": "Product Pages","rationale": "Base requirement for AI visibility in product-specific shopping intent queries."},
@@ -53,22 +58,19 @@ PROFILE_SCHEMA_MAP: dict[str, list[dict[str, str]]] = {
         {"schema_type": "Organization",         "page_type": "Homepage",     "rationale": "Brand identity anchor for agency-level authority and reputation."},
         {"schema_type": "Service",              "page_type": "Solution Pages","rationale": "Powers visibility for specialized services like 'SaaS SEO' or 'B2B Ads'."},
         {"schema_type": "Person",               "page_type": "Team Page",    "rationale": "Authoritative signal linking expertise to specific senior team members."},
+    ],
+    "marketplace_aggregator": [
+        {"schema_type": "Organization",         "page_type": "Homepage",     "rationale": "Brand identity anchor for platform authority."},
+        {"schema_type": "CollectionPage",       "page_type": "Category Pages","rationale": "Structures comparison arrays for category searches."},
+        {"schema_type": "ItemList",             "page_type": "Search Results", "rationale": "Itemizes listings for informational discovery options."},
+        {"schema_type": "WebSite",              "page_type": "Homepage",     "rationale": "Enables sitelinks and direct internal search hooks."},
+    ],
+    "education_institution": [
+        {"schema_type": "EducationalOrganization","page_type": "Homepage",   "rationale": "Establishes core institutional entity for AI Knowledge Graph."},
+        {"schema_type": "Course",               "page_type": "Course Pages", "rationale": "Enables direct surfacing in 'best courses for [subject]' queries."},
+        {"schema_type": "FAQPage",              "page_type": "Admissions",   "rationale": "Directly answers pre-enrollment informational queries."},
     ]
 }
-
-# Legacy Map Aliases
-PROFILE_SCHEMA_MAP["b2b_saas"] = PROFILE_SCHEMA_MAP["b2b_saas_tech"]
-PROFILE_SCHEMA_MAP["consumer_saas"] = PROFILE_SCHEMA_MAP["b2b_saas_tech"]
-PROFILE_SCHEMA_MAP["ecommerce_brand"] = PROFILE_SCHEMA_MAP["ecommerce_retail"]
-PROFILE_SCHEMA_MAP["marketplace"] = PROFILE_SCHEMA_MAP["b2b_saas_tech"]
-PROFILE_SCHEMA_MAP["local_dentist"] = PROFILE_SCHEMA_MAP["local_service_ymyl"]
-PROFILE_SCHEMA_MAP["local_law_firm"] = PROFILE_SCHEMA_MAP["local_service_ymyl"]
-PROFILE_SCHEMA_MAP["freelancer_consultant"] = PROFILE_SCHEMA_MAP["professional_services"]
-PROFILE_SCHEMA_MAP["agency_marketing"] = PROFILE_SCHEMA_MAP["professional_services"]
-PROFILE_SCHEMA_MAP["education_course_provider"] = PROFILE_SCHEMA_MAP["professional_services"]
-PROFILE_SCHEMA_MAP["media_blog"] = PROFILE_SCHEMA_MAP["publisher_media"]
-PROFILE_SCHEMA_MAP["restaurant_hospitality"] = PROFILE_SCHEMA_MAP["hospitality_travel"]
-PROFILE_SCHEMA_MAP["local_tech_provider"] = PROFILE_SCHEMA_MAP["professional_services"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,6 +238,9 @@ def process(state: dict) -> dict:
     meta_description: str = state.get("meta_description", "")
     profile_key: str      = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
     
+    # Normalize profile key
+    profile_key = normalize_profile_key(profile_key)
+    
     # Audit Integrity Context
     integrity_status = state.get("audit_integrity_status", "valid")
     allowed_types = profile.get("allowed_schema_types", []) # Safety guard from business_profiles.py
@@ -277,7 +282,9 @@ def process(state: dict) -> dict:
             "schema_type": reco_label,
             "rationale": spec["rationale"],
             "jsonld": json.dumps(jsonld, indent=2, ensure_ascii=False),
-            "integrity_context": "Direct Signal" if integrity_status == "valid" else "Profile Inferred"
+            "evidence_origin": "on_site" if integrity_status == "valid" else "profile_inference",
+            "evidence_confidence": "high" if integrity_status == "valid" else "medium",
+            "supporting_signals": [f"Industry standard for {profile_key}", f"Detected as missing on {spec['page_type']}"]
         })
 
     completeness = _compute_completeness(detected_types, required_specs)

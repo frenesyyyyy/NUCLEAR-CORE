@@ -28,17 +28,25 @@ PROFILE_KEYWORDS: dict[str, list[str]] = {
         "piattaforma b2b", "infrastruttura it", "gestionale", "sviluppo software",
     ],
 
-    "local_service_ymyl": [
+    "local_healthcare_ymyl": [
         # EN
-        "lawyer", "dentist", "clinic", "doctor", "health",
-        "medical", "therapy", "emergency", "consultation", "patient",
+        "dentist", "clinic", "doctor", "health", "medical",
+        "therapy", "emergency", "consultation", "patient", "wellness",
         "appointment", "diagnosis", "treatment", "surgery", "insurance",
-        "legal", "court", "attorney",
         # IT / Auto Repair (YMYL Safety)
-        "avvocato", "studio legale", "pazienti", "dentista", "salute",
+        "pazienti", "dentista", "salute", "cura", "benessere",
         "medico", "clinica", "ospedale", "ambulatorio", "visita",
         "officina", "riparazione", "tagliando", "manutenzione",
         "ricambi", "carrozzeria", "meccanico",
+    ],
+
+    "local_legal_ymyl": [
+        # EN
+        "lawyer", "attorney", "legal", "court", "law",
+        "litigation", "defense", "consultation", "settlement", "lawsuit",
+        # IT
+        "avvocato", "studio legale", "legale", "tribunale", "causa",
+        "difesa", "consulenza legale", "diritto", "risarcimento",
     ],
 
     "ecommerce_retail": [
@@ -151,7 +159,6 @@ def select_business_profile(
     schema_type_counts: dict = None,
     discovered_location: str = "",
     extra_context: dict = None,
-    ignore_legal: bool = False,
 ) -> tuple[str, dict]:
     """
     Deterministically select a canonical business profile using keyword
@@ -199,10 +206,12 @@ def select_business_profile(
         "LodgingBusiness":     ("hospitality_travel", 4),
         "Restaurant":          ("hospitality_travel", 3),
         "Menu":                ("hospitality_travel", 2),
-        "LocalBusiness":       ("local_service_ymyl", 2),
-        "MedicalBusiness":     ("local_service_ymyl", 4),
-        "Dentist":             ("local_service_ymyl", 4),
-        "Physician":           ("local_service_ymyl", 4),
+        "LocalBusiness":       ("local_healthcare_ymyl", 1), # Splitting local weight
+        "MedicalBusiness":     ("local_healthcare_ymyl", 4),
+        "Dentist":             ("local_healthcare_ymyl", 4),
+        "Physician":           ("local_healthcare_ymyl", 4),
+        "LegalService":        ("local_legal_ymyl", 4),
+        "Attorney":            ("local_legal_ymyl", 4),
         "Article":             ("publisher_media", 2),
         "NewsArticle":         ("publisher_media", 3),
         "BlogPosting":         ("publisher_media", 2),

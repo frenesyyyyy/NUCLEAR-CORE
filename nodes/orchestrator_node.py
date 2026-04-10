@@ -175,6 +175,8 @@ def process(state: dict) -> dict:
     
     CRITICAL INSTRUCTION: Base your analysis ONLY on the scraped content above. DO NOT guess from the URL alone.
     
+    GLOBAL LOCALE ENFORCEMENT: You MUST translate EVERY SINGLE STRING VALUE in your JSON output into the target locale ({locale}). This includes 'primary_industry', 'secondary_revenue_streams', 'target_audience_summary', and every value inside the 'persona_matrix'. If the locale is 'it', you must output 'Servizi Sanitari', NOT 'Healthcare Services'.
+    
     ANTI-HALLUCINATION PROTOCOL: You must first identify the EXACT physical or digital product sold. If the company sells physical rooms, accommodations, or local services, your `target_audience_summary` and `persona_matrix` MUST reflect individuals booking physical spaces. DO NOT hallucinate software, SaaS, or IT personas unless the website explicitly sells code or digital platforms.
     
     ENTITY DECOMPOSITION RULE: Do not mash multiple distinct business models or practice areas into a single industry string. Identify the single most dominant 'primary_industry'. If the business is a hybrid or a professional service with multiple verticals, list those distinct branches in 'secondary_revenue_streams'. Your generated 'persona_matrix' must reflect users for ALL identified streams.

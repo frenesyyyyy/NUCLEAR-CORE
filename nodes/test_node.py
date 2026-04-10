@@ -33,9 +33,9 @@ def test_node():
     print("\nTesting Local Service YMYL state...")
     result_local = process(mock_local_state)
     # Keyword scoring directly returns the Canonical Agency Profile
-    assert result_local["business_profile_key"] == "local_service_ymyl"
-    # because of the alias router in business_profiles.py, the returned dictionary label will be "Local Service / YMYL"
-    assert result_local["business_profile_summary"]["label"] == "Local Service / YMYL"
+    assert result_local["business_profile_key"] == "local_healthcare_ymyl"
+    # because of the alias router in business_profiles.py, the returned dictionary label will be "Local Healthcare / Medical"
+    assert result_local["business_profile_summary"]["label"] == "Local Healthcare / Medical"
     
     print("Test passed: Local Service YMYL correctly classified and summary loaded.")
 

@@ -10,7 +10,12 @@ All logic is deterministic; no external API calls.
 """
 
 from rich.console import Console
-from nodes.business_profiles import DEFAULT_PROFILE_KEY
+from nodes.business_profiles import (
+    DEFAULT_PROFILE_KEY,
+    normalize_profile_key,
+    get_platform_like_profiles,
+    get_local_trust_profiles
+)
 
 console = Console()
 
@@ -57,20 +62,14 @@ BOT_REGISTRY = [
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Profiles where citation/retrieval visibility is critical
-_CITATION_CRITICAL_PROFILES = {
-    "b2b_saas_tech", "b2b_saas", "consumer_saas", "ecommerce_brand", "marketplace", "ecommerce_retail",
-    "agency_marketing", "education_course_provider", "local_tech_provider",
-}
+_CITATION_CRITICAL_PROFILES = get_platform_like_profiles().union({"professional_services", "education_institution"})
 
 # Profiles where local trust and proximity matter more than broad AI training
-_LOCAL_TRUST_PROFILES = {
-    "local_dentist", "local_law_firm", "restaurant_hospitality",
-    "freelancer_consultant",
-}
+_LOCAL_TRUST_PROFILES = get_local_trust_profiles()
 
 # Profiles where content IP / originality is high (more reason to block training)
 _HIGH_IP_PROFILES = {
-    "media_blog", "education_course_provider",
+    "publisher_media", "education_institution",
 }
 
 
@@ -293,6 +292,8 @@ def process(state: dict) -> dict:
     profile_summary: dict = state.get("business_profile_summary", {})
     target_industry: str  = state.get("target_industry", "Unknown")
     profile_key: str      = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
+    
+    profile_key = normalize_profile_key(profile_key)
 
     geo_behavior = profile_summary.get("geo_behavior", profile.get("geo_behavior", "standard_retrieval"))
     label = profile_summary.get("label", profile_key)
@@ -312,6 +313,9 @@ def process(state: dict) -> dict:
             "current": current,
             "recommended": rec["recommended"],
             "reason": rec["reason"],
+            "evidence_origin": "on_site" if robots_status != "not_found" else "profile_inference",
+            "evidence_confidence": "high" if robots_status != "not_found" else "medium",
+            "supporting_signals": [f"Purpose: {bot_entry['purpose']}", f"Robots status: {robots_status}"]
         })
 
     # Generate recommended robots.txt

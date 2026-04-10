@@ -143,17 +143,23 @@ def process(state: dict) -> dict:
     Identify the specific gaps that prevent this brand from being the "authoritative answer" for the target industry in AI search engines (GEO).
     
     RULES FOR ACTION GENERATION:
-    1. Generate at least 2-3 specific "missing_page_types" (e.g., "Dental Implants Procedure Guide", "Insurance & Financing FAQ").
-    2. Identify at least 2 "discovery_intent_gaps" that convert general interest into specific actions.
-    3. Highlight MUST-HAVE "trust_signal_gaps" for the specific locale (e.g., P.IVA/PEC for Italy).
+    1. Every action MUST include:
+       - "evidence_origin": ("on_site" | "off_site" | "query_gap" | "profile_inference" | "mixed")
+       - "evidence_confidence": ("high" | "medium" | "low")
+       - "supporting_signals": [list of 1-3 concrete evidence strings]
+    2. Use "on_site" for signals discovered on this URL.
+    3. Use "query_gap" or "off_site" if market context shows a gap the site doesn't cover.
+    4. Use "profile_inference" if the recommendation is a best-practice for the industry but not directly triggered by a specific site-fail.
+    5. Generate at least 2-3 specific "missing_page_types".
+    6. Identify MUST-HAVE "trust_signal_gaps" for the specific locale (e.g., P.IVA/PEC for Italy).
 
     Return STRICT JSON with exactly these keys:
-    "missing_page_types": list of [page_name, why_needed]
-    "trust_signal_gaps": list of [signal, evidence_basis]
-    "discovery_intent_gaps": list of [intent, suggestion]
-    "entity_trust_gaps": list of [entity, relation]
-    "local_visibility_gaps": list of [gap, fix]
-    "competitor_gap_opportunities": list of [competitor_strength, our_counter_strategy]
+    "missing_page_types": list of [page_name, why_needed, evidence_origin, evidence_confidence, supporting_signals]
+    "trust_signal_gaps": list of [signal, evidence_basis, evidence_origin, evidence_confidence, supporting_signals]
+    "discovery_intent_gaps": list of [intent, suggestion, evidence_origin, evidence_confidence, supporting_signals]
+    "entity_trust_gaps": list of [entity, relation, evidence_origin, evidence_confidence, supporting_signals]
+    "local_visibility_gaps": list of [gap, fix, evidence_origin, evidence_confidence, supporting_signals]
+    "competitor_gap_opportunities": list of [competitor_strength, our_counter_strategy, evidence_origin, evidence_confidence, supporting_signals]
     "original_frameworks": list of proprietary methodologies actually present on this site.
     """
     

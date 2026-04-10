@@ -12,6 +12,7 @@ All data is deterministic and stateless. No external API calls.
 """
 
 from __future__ import annotations
+from nodes.business_profiles import normalize_profile_key
 
 # ─────────────────────────────────────────────────────────────────────────────
 # A. SOURCE FAMILY TAXONOMY
@@ -30,6 +31,8 @@ SOURCE_FAMILIES = [
     "official_registries_legal",
     "employer_workforce_reputation",
     "social_proof_platforms",
+    "ignored_noise",
+    "unclassified_candidate",
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -192,32 +195,100 @@ DOMAIN_FAMILY_MAP: list[tuple[str, str, float]] = [
 
 SOURCE_PACKS: dict[str, dict] = {
 
-    "local_service_ymyl": {
-        "label": "Local YMYL Provider (Legal/Medical)",
+    "local_healthcare_ymyl": {
+        "label": "Healthcare Provider / Clinic / Medical Center",
+        "relevant_families": [
+            "local_directories_maps",
+            "review_ecosystems",
+            "professional_directories",
+            "editorial_news_pr",
+            "forums_communities",
+            "employer_workforce_reputation",
+        ],
+        "weights_override": {
+            # Primary trust signals for multi-location clinics
+            "local_directories_maps": 2.5,          # Google Maps / local directories are king for 'near me' queries
+            "review_ecosystems": 2.2,               # Patient reviews (MioDottore, Doctolib, Healthgrades) are critical
+            "professional_directories": 1.8,        # Practitioner/clinic registries (dentisti-italia, ordini medici)
+            "editorial_news_pr": 1.4,               # Healthcare editorial / local press coverage
+            "forums_communities": 0.8,              # Patient forums, low authority but real signal
+            "employer_workforce_reputation": 0.6,   # Glassdoor/Indeed — relevant for large clinic chains
+            # Suppressed / irrelevant
+            "app_ecosystems": 0.0,
+            "software_comparison_ecosystems": 0.0,
+            "marketplace_partner_ecosystems": 0.0,
+            "docs_integrations_developer": 0.0,
+            "official_registries_legal": 0.3,       # Corporate trust only, not primary healthcare anchor
+        },
+        "trust_anchors": [
+            # Patient review ecosystems
+            "miodottore.it", "doctolib.", "healthgrades.com", "zocdoc.com",
+            "idoctors.it", "trovadentisti.it", "topdoctors.", "dottori.it",
+            "medicitalia.it", "pazienti.it",
+            # Local maps & directories
+            "maps.google.", "google.com/maps", "paginegialle.it", "paginebianche.it",
+            "cylex.it", "virgilio.it",
+            # Practitioner / clinic registries
+            "dentisti-italia.it", "medici-italia.it",
+            "fnomceo.it", "ordinemedici.",
+            # Healthcare editorial
+            "corriere.it/salute", "repubblica.it/salute", "humanitas.it",
+        ],
+        "irrelevant_families": [
+            "app_ecosystems",
+            "software_comparison_ecosystems",
+            "marketplace_partner_ecosystems",
+            "docs_integrations_developer",
+        ],
+        "missing_gap_message": {
+            "local_directories_maps": (
+                "No local directory or Google Maps presence detected. "
+                "Critical gap for geographic healthcare queries ('clinic near me', 'doctor [city]'). "
+                "Multi-location providers must have verified listings per location."
+            ),
+            "review_ecosystems": (
+                "No patient review platform presence (e.g. MioDottore, Doctolib, Healthgrades, Zocdoc). "
+                "Patient trust credibility is severely limited without verified review coverage."
+            ),
+            "professional_directories": (
+                "No practitioner or clinic directory presence detected (e.g. dentisti-italia.it, ordini medici). "
+                "Professional registry validation gap weakens institutional credibility."
+            ),
+            "editorial_news_pr": (
+                "No healthcare editorial or local press coverage detected. "
+                "Lack of editorial validation limits authority for competitive medical queries."
+            ),
+        },
+        "scoring_weights": {
+            "visibility": 0.30,         # Multi-location discovery depends heavily on visibility
+            "evidence_depth": 0.25,
+            "authority": 0.30,
+            "confidence": 0.15,
+        }
+    },
+
+    "local_legal_ymyl": {
+        "label": "Local Legal Services",
         "relevant_families": [
             "official_registries_legal",
             "professional_directories",
             "local_directories_maps",
-            "review_ecosystems",
             "editorial_news_pr",
             "forums_communities",
         ],
         "weights_override": {
-            "official_registries_legal": 2.0,   # bar association = gold signal
+            "official_registries_legal": 2.5,   # Bar association is paramount
             "professional_directories": 1.8,
             "local_directories_maps": 1.6,
-            "review_ecosystems": 1.3,
-            "editorial_news_pr": 1.0,
-            "software_comparison_ecosystems": 0.0,  # irrelevant
-            "app_ecosystems": 0.0,                  # irrelevant
-            "marketplace_partner_ecosystems": 0.0,  # irrelevant
-            "docs_integrations_developer": 0.0,     # irrelevant
+            "editorial_news_pr": 1.2,
+            "review_ecosystems": 0.8,
+            "app_ecosystems": 0.0,
+            "software_comparison_ecosystems": 0.0,
         },
         "trust_anchors": [
-            "ordine-avvocati.", "ordineavvocati.", "consiglionazionaleforense.",
-            "avvocati-italia.it", "legal500.com", "chambers.com",
-            "martindale.com", "findlaw.com", "paginegialle.it",
-            "avvocati.it", "leggio.it"
+            "ordine-avvocati.", "consiglionazionaleforense.", "ordineavvocati.",
+            "avvocati.it", "avvocati-italia.it", "legal500.com", "chambers.com",
+            "martindale.com", "findlaw.com", "leggio.it"
         ],
         "irrelevant_families": [
             "app_ecosystems",
@@ -227,10 +298,9 @@ SOURCE_PACKS: dict[str, dict] = {
             "employer_workforce_reputation",
         ],
         "missing_gap_message": {
-            "official_registries_legal": "No bar association / ordine avvocati listing detected. Critical trust gap for legal professionals.",
-            "professional_directories": "No legal directory presence detected (e.g. avvocati.it, Legal500, Chambers). High risk for 'best lawyer near me' queries.",
-            "local_directories_maps": "No local Google Maps / directory presence detected. High risk for geographic discovery queries.",
-            "review_ecosystems": "No client review platform presence detected. Trust credibility may be limited.",
+            "official_registries_legal": "No bar association / ordine avvocati listing detected. Critical trust gap for lawyers.",
+            "professional_directories": "No legal directory presence (e.g. avvocati.it, Legal500, Chambers). Huge visibility risk.",
+            "local_directories_maps": "No local mapping presence found. Risk for 'lawyer near me' queries.",
         },
         "scoring_weights": {
             "visibility": 0.25,
@@ -326,45 +396,6 @@ SOURCE_PACKS: dict[str, dict] = {
         }
     },
 
-    "local_tech_provider": {
-        "label": "Local Tech / Agency",
-        "relevant_families": [
-            "professional_directories",
-            "editorial_news_pr",
-            "review_ecosystems",
-            "local_directories_maps",
-            "forums_communities",
-            "software_comparison_ecosystems",
-        ],
-        "weights_override": {
-            "professional_directories": 1.8,
-            "editorial_news_pr": 1.5,
-            "review_ecosystems": 1.4,
-            "local_directories_maps": 1.2,
-            "app_ecosystems": 0.5,
-            "marketplace_partner_ecosystems": 0.8,
-            "official_registries_legal": 0.8,
-        },
-        "trust_anchors": [
-            "clutch.co", "g2.com", "capterra.com",
-            "paginegialle.it", "crunchbase.com", "linkedin.com"
-        ],
-        "irrelevant_families": [
-            "official_registries_legal",
-            "employer_workforce_reputation",
-        ],
-        "missing_gap_message": {
-            "professional_directories": "No agency directory presence (e.g. Clutch). Critical for B2B credibility.",
-            "review_ecosystems": "No review platform presence detected.",
-        },
-        "scoring_weights": {
-            "visibility": 0.30,
-            "evidence_depth": 0.25,
-            "authority": 0.30,
-            "confidence": 0.15,
-        }
-    },
-
     "b2b_saas_tech": {
         "label": "B2B SaaS",
         "relevant_families": [
@@ -399,46 +430,6 @@ SOURCE_PACKS: dict[str, dict] = {
             "software_comparison_ecosystems": "No software review/comparison platform presence (G2, Capterra, ProductHunt). Critical gap for SaaS buyer discovery.",
             "docs_integrations_developer": "No developer ecosystem presence (GitHub, Zapier, docs). Risk for technical buyer evaluation.",
             "editorial_news_pr": "No press/editorial mentions detected.",
-        },
-        "scoring_weights": {
-            "visibility": 0.35,
-            "evidence_depth": 0.25,
-            "authority": 0.30,
-            "confidence": 0.10,
-        }
-    },
-
-    "consumer_saas": {
-        "label": "Consumer SaaS / App",
-        "relevant_families": [
-            "app_ecosystems",
-            "software_comparison_ecosystems",
-            "review_ecosystems",
-            "editorial_news_pr",
-            "forums_communities",
-            "social_proof_platforms",
-        ],
-        "weights_override": {
-            "app_ecosystems": 2.0,
-            "software_comparison_ecosystems": 1.5,
-            "review_ecosystems": 1.5,
-            "editorial_news_pr": 1.3,
-            "forums_communities": 1.2,
-            "local_directories_maps": 0.2,
-            "official_registries_legal": 0.2,
-        },
-        "trust_anchors": [
-            "apps.apple.com", "play.google.com", "trustpilot.com",
-            "producthunt.com", "reddit.com", "techcrunch.com"
-        ],
-        "irrelevant_families": [
-            "local_directories_maps",
-            "official_registries_legal",
-            "professional_directories",
-        ],
-        "missing_gap_message": {
-            "app_ecosystems": "No App Store / Google Play presence detected. Critical for consumer app discovery.",
-            "review_ecosystems": "No consumer review platform presence.",
         },
         "scoring_weights": {
             "visibility": 0.35,
@@ -489,7 +480,7 @@ SOURCE_PACKS: dict[str, dict] = {
         }
     },
 
-    "marketplace": {
+    "marketplace_aggregator": {
         "label": "Marketplace / Platform / Delivery",
         "relevant_families": [
             "app_ecosystems",
@@ -615,7 +606,7 @@ SOURCE_PACKS: dict[str, dict] = {
         }
     },
 
-    "education_course_provider": {
+    "education_institution": {
         "label": "Education / Course Provider",
         "relevant_families": [
             "review_ecosystems",
@@ -693,28 +684,6 @@ SOURCE_PACKS: dict[str, dict] = {
 }
 
 
-
-# ── Canonical Profile Overrides ──
-SOURCE_PACKS["marketplace_aggregator"] = dict(SOURCE_PACKS.get("b2b_saas_tech", {}))
-SOURCE_PACKS["marketplace_aggregator"]["label"] = "Marketplace/Aggregator Platform"
-
-SOURCE_PACKS["education_institution"] = dict(SOURCE_PACKS.get("professional_services", {}))
-SOURCE_PACKS["education_institution"]["label"] = "Educational Institution"
-
-# ── Legacy Map Aliases ──
-SOURCE_PACKS["b2b_saas"] = SOURCE_PACKS["b2b_saas_tech"]
-SOURCE_PACKS["consumer_saas"] = SOURCE_PACKS["b2b_saas_tech"]
-SOURCE_PACKS["ecommerce_brand"] = SOURCE_PACKS["ecommerce_retail"]
-SOURCE_PACKS["marketplace"] = SOURCE_PACKS["marketplace_aggregator"]
-SOURCE_PACKS["local_dentist"] = SOURCE_PACKS["local_service_ymyl"]
-SOURCE_PACKS["local_law_firm"] = SOURCE_PACKS["local_service_ymyl"]
-SOURCE_PACKS["freelancer_consultant"] = SOURCE_PACKS["professional_services"]
-SOURCE_PACKS["agency_marketing"] = SOURCE_PACKS["professional_services"]
-SOURCE_PACKS["education_course_provider"] = SOURCE_PACKS["education_institution"]
-SOURCE_PACKS["media_blog"] = SOURCE_PACKS["publisher_media"]
-SOURCE_PACKS["restaurant_hospitality"] = SOURCE_PACKS["hospitality_travel"]
-SOURCE_PACKS["local_tech_provider"] = SOURCE_PACKS["professional_services"]
-
 # Safe fallbacks for profiles not explicitly mapped
 SOURCE_PACKS["general_local_business"] = {
     "label": "General Local Business",
@@ -752,40 +721,6 @@ SOURCE_PACKS["general_local_business"] = {
     }
 }
 
-SOURCE_PACKS["enterprise_corporate"] = {
-    "label": "Enterprise / Corporate",
-    "relevant_families": [
-        "editorial_news_pr",
-        "review_ecosystems",
-        "professional_directories",
-        "app_ecosystems",
-        "marketplace_partner_ecosystems",
-        "employer_workforce_reputation",
-    ],
-    "weights_override": {
-        "editorial_news_pr": 1.8,
-        "review_ecosystems": 1.3,
-        "professional_directories": 1.5,
-        "app_ecosystems": 1.0,
-        "marketplace_partner_ecosystems": 1.2,
-        "employer_workforce_reputation": 1.2,
-        "local_directories_maps": 0.5,
-    },
-    "trust_anchors": [
-        "bloomberg.com", "forbes.com", "crunchbase.com",
-        "linkedin.com", "glassdoor.com", "trustpilot.com"
-    ],
-    "irrelevant_families": [],
-    "missing_gap_message": {
-        "editorial_news_pr": "No press/editorial presence detected. Authority gap for enterprise context.",
-    },
-    "scoring_weights": {
-        "visibility": 0.35,
-        "evidence_depth": 0.25,
-        "authority": 0.30,
-        "confidence": 0.10,
-    }
-}
 
 SOURCE_PACKS["unknown"] = dict(SOURCE_PACKS["general_local_business"])
 # Safely assign specific unknown weights overriding general local
@@ -802,10 +737,11 @@ SOURCE_PACKS["unknown"]["scoring_weights"] = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_source_pack(profile_key: str) -> dict:
-    """Return the source pack for a given business profile key, with safe fallback."""
-    if profile_key not in SOURCE_PACKS:
+    """Return the source pack for a given business profile key, normalized to canonical."""
+    norm_key = normalize_profile_key(profile_key)
+    if norm_key not in SOURCE_PACKS:
         return SOURCE_PACKS["general_local_business"]
-    return SOURCE_PACKS[profile_key]
+    return SOURCE_PACKS[norm_key]
 
 def get_profile_scoring_weights(profile_key: str) -> dict[str, float]:
     """Return exactly 4 deterministic pillar weights for the profile."""
@@ -819,32 +755,76 @@ def get_profile_scoring_weights(profile_key: str) -> dict[str, float]:
     return weights
 
 
-def classify_url_to_family(url: str, brand_domain: str) -> tuple[str, float]:
+def classify_url_to_family(url: str, brand_domain: str, brand_name: str = None) -> tuple[str, float]:
     """
     Classify a URL into a source family and return (family, base_weight).
-    Returns ("owned", 0.5) for brand-owned URLs, ("unknown", 0.5) for unclassified.
+    Returns ("owned", 0.5) for brand-owned URLs.
+    Unclassified URLs are split into ("ignored_noise", 0.0) or ("unclassified_candidate", 0.5).
     """
     from urllib.parse import urlparse
+    import re
+    
+    if not url:
+        return "ignored_noise", 0.0
+
     try:
-        hostname = urlparse(url).hostname or ""
+        parsed = urlparse(url)
+        hostname = parsed.hostname or ""
     except Exception:
-        hostname = ""
+        return "ignored_noise", 0.0
+
+    hostname = hostname.lower().strip()
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
 
     if not hostname:
-        return "unknown", 0.5
+        return "ignored_noise", 0.0
 
     # Owned detection
-    if brand_domain and brand_domain in hostname:
-        return "owned", 0.5
+    if brand_domain:
+        bd = brand_domain.lower().strip()
+        if bd.startswith("www."):
+            bd = bd[4:]
+        if bd and bd in hostname:
+            return "owned", 0.5
 
     url_lower = url.lower()
+    
+    # Noise Heuristics (Must run BEFORE canonical patterns to override generic domains)
+    noise_exact_domains = {
+        "youtube.com", "youtu.be", "vimeo.com", "tiktok.com", "instagram.com", "facebook.com",
+        "twitter.com", "x.com", "pinterest.com", "wa.me", "api.whatsapp.com", "bit.ly", "goo.gl", "t.co",
+        "duckduckgo.com", "baidu.com", "yandex.com", "reddit.com/search"
+    }
+    
+    noise_paths = [
+        "google.com/search", "google.it/search", "search.yahoo.com", "bing.com/search",
+        "maps.google.com/search"
+    ]
+    
+    # 1. Exact or subdomain match for known pure-noise aggregators/social sites
+    is_noise_domain = any(hostname == nd or hostname.endswith("." + nd) for nd in noise_exact_domains)
+    if is_noise_domain:
+        return "ignored_noise", 0.0
+        
+    # 2. Path-based check for utility URLs
+    if any(np in url_lower for np in noise_paths):
+        return "ignored_noise", 0.0
+
+    # Check canonical patterns
     for pattern, family, weight in DOMAIN_FAMILY_MAP:
         if pattern in hostname or pattern in url_lower:
             return family, weight
 
-    return "unknown", 0.5
+    # Brand Relevance Tie-breaker
+    if brand_name:
+        brand_slug = re.sub(r'[^a-z0-9]', '', brand_name.lower())
+        if brand_slug and len(brand_slug) > 3:
+            if brand_slug in url_lower:
+                return "unclassified_candidate", 0.5
 
-    return "unknown", 0.5
+    # If it survived noise filters, it's an unresolved candidate
+    return "unclassified_candidate", 0.5
 
 
 def get_canonical_source_urls(state: dict) -> list[str]:

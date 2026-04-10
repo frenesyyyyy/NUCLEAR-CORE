@@ -161,22 +161,21 @@ def _render_agency_action_plan(blueprint: dict) -> str:
         if not actions: continue
         md += f"### {phase_name}\n"
         for act in actions:
-            title = act.get("action_title", "Unnamed Action")
-            why = act.get("why_it_matters", "Strategic improvement")
-            evidence = act.get("evidence_basis", "Profile inference")
-            priority = act.get("priority", "Medium")
-            
-            # Confidence logic based on evidence string
-            confidence = "High" if "direct-evidence" in evidence.lower() else "Medium"
-            if "partial-evidence" in evidence.lower(): confidence = "Low (Tentative)"
-
-            expected_impact = act.get("expected_impact", "High visibility lift")
+            title       = act.get("action_title", "Unnamed Action")
+            why         = act.get("why_it_matters", "Strategic improvement")
+            origin      = act.get("evidence_origin", "profile_inference")
+            confidence  = act.get("evidence_confidence", "low")
+            signals     = act.get("supporting_signals", [])
+            priority    = act.get("priority", "Medium")
+            impact      = act.get("expected_impact", "High visibility lift")
 
             md += f"#### **{title}**\n"
             md += f"- **Why this matters for visibility:** {why}\n"
-            md += f"- **Expected Impact:** {expected_impact}\n"
-            md += f"- **Evidence basis:** {evidence}\n"
-            md += f"- **Priority:** {priority} | **Confidence level:** {confidence}\n\n"
+            md += f"- **Expected Impact:** {impact}\n"
+            md += f"- **Evidence Basis:** {origin.replace('_', ' ').title()} ({confidence.title()} Confidence)\n"
+            if signals:
+                md += f"- **Supporting Signals:** {', '.join(signals)}\n"
+            md += f"- **Priority:** {priority}\n\n"
             
     md += "---\n\n"
     return md
@@ -285,22 +284,12 @@ def process(state: dict) -> dict:
         all_strategic = blueprint.get("all_strategic_actions", [])
         source_mode = state.get("source_of_truth_mode", "hybrid")
         
-        # Verdict Logic (Requirement C/D)
+        # Verdict Logic — rendered directly from validator state (finalizer never judges)
         verdict = state.get("agency_verdict", "REQUIRES ANALYST REVIEW")
         verdict_reason = state.get("agency_verdict_reason", "Fallback: Unverified extraction.")
 
-        # Action Quality Check (Backup safety check on actions)
-        generic_only = all("Schema" in a.get("action_title", "") or "robots.txt" in a.get("action_title", "") for a in all_strategic)
-        if verdict == "CLIENT READY" and (len(all_strategic) < 3 or generic_only):
-            verdict = "REQUIRES ANALYST REVIEW"
-            if len(all_strategic) < 3:
-                verdict_reason = "Insufficient strategic depth (fewer than 3 actions generated)."
-            else:
-                verdict_reason = "Action plan is purely technical; lacks business-specific strategy."
-
         # Add Visual Verdict Banner
-        v_color = "green" if "CLIENT READY" == verdict else ("yellow" if "REVIEW" in verdict else "red")
-        md_content += f"## ⚖️ Audit Verdict: **{verdict}**\n"
+        md_content += f"## Audit Verdict: **{verdict}**\n"
         md_content += f"> **Verdict Basis:** {verdict_reason}\n\n"
         
         tier_stats = state.get("stress_test_tier_stats", {})
@@ -311,20 +300,28 @@ def process(state: dict) -> dict:
             md_content += "> **ZERO DISCOVERY VISIBILITY**: Brand has no visibility in blind category searches.\n"
             md_content += "> Current performance depends entirely on strictly branded or direct query matches.\n\n"
             
+        # ── Contradiction Alert Surface ────────────────────────────────────────
+        contra_flags = state.get("contradiction_flags", [])
+        if contra_flags:
+            md_content += "> [!WARNING]\n"
+            md_content += "> **CONTRADICTION ALERT**: The decision engine has detected discordant signals in this audit.  \n"
+            md_content += "> **Flags Detected:** " + ", ".join(contra_flags) + "  \n"
+            md_content += "> **Action:** This audit requires manual analyst validation to resolve conflicting metrics.  \n\n"
+
         md_content += "---\n\n"
 
-        # 3b. Agency Decision Summary (Requirement E)
-        md_content += "## 🎯 Agency Decision Summary\n"
+        # 3b. Agency Decision Summary — Strict render of validator outputs only
+        decision_risks = state.get("decision_risks", [])
+        decision_next_step = state.get("decision_next_step", "Awaiting validator output.")
+        decision_summary = state.get("decision_summary", verdict_reason)
+
+        md_content += "## Agency Decision Summary\n"
         md_content += f"- **Verdict:** {verdict}\n"
-        md_content += f"- **Rationale:** {verdict_reason}\n"
-        md_content += f"- **Key Risks:** {'Thin extraction payload' if integrity_status != 'valid' else 'None detected'}, {'Off-site bias' if source_mode == 'offsite_only' else 'Standard market noise'}\n"
-        
-        next_step = "Proceed to client presentation."
-        if verdict == "NOT CLIENT READY":
-            next_step = "Retry extraction with custom proxies or manual site input."
-        elif verdict == "REQUIRES ANALYST REVIEW":
-            next_step = "Manually verify profile-inferred actions against on-site reality."
-        md_content += f"- **Recommended Next Step:** {next_step}\n\n---\n\n"
+        md_content += f"- **Rationale:** {decision_summary}\n"
+        md_content += "- **Key Risks:**\n"
+        for risk in decision_risks:
+            md_content += f"  - {risk}\n"
+        md_content += f"- **Recommended Next Step:** {decision_next_step}\n\n---\n\n"
 
         # 3c. Integrity Banners & Rescue Reporting
         if source_mode == "offsite_only":

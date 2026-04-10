@@ -23,7 +23,7 @@ from nodes.source_matrix import (
     get_canonical_source_urls
 )
 from nodes.earned_media_node import _FAMILY_TO_LEGACY_BUCKET
-from nodes.business_profiles import DEFAULT_PROFILE_KEY
+from nodes.business_profiles import DEFAULT_PROFILE_KEY, normalize_profile_key, get_local_trust_profiles
 
 console = Console()
 
@@ -106,15 +106,17 @@ def _evaluate_citation_risk(
         return risks
 
     # Legacy fallback risk logic (if source_matrix data not available)
-    if profile_key in ("b2b_saas_tech", "ecommerce_retail", "publisher_media", "b2b_saas", "consumer_saas", "ecommerce_brand", "marketplace"):
+    profile_key = normalize_profile_key(profile_key)
+    
+    if profile_key in ("b2b_saas_tech", "ecommerce_retail", "publisher_media", "marketplace_aggregator"):
         if review_count == 0:
             risks.append("Missing validation: No review platform mentions (G2, Trustpilot, App Store). High risk of exclusion from comparison queries.")
 
-    elif profile_key in ("media_blog", "education_course_provider", "agency_marketing", "publisher_media", "professional_services"):
+    elif profile_key in ("education_institution", "publisher_media", "professional_services"):
         if earned_count == 0:
             risks.append("Authority gap: No editorial/press mentions. High risk for 'best in class' or thought-leadership queries.")
 
-    elif profile_key in ("local_dentist", "local_law_firm", "restaurant_hospitality", "local_tech_provider", "freelancer_consultant", "local_service_ymyl", "hospitality_travel"):
+    elif profile_key in get_local_trust_profiles().union({"local_healthcare_ymyl", "local_legal_ymyl", "hospitality_travel"}):
         if review_count == 0 and directory_count == 0:
             risks.append("Local ghost: No local directory or review citations detected. High risk for 'near me' discovery.")
         elif review_count == 0:
@@ -139,10 +141,12 @@ def process(state: dict) -> dict:
 
     earned_media: dict  = state.get("earned_media", {})
     profile: dict       = state.get("business_profile", {})
-    profile_key: str    = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
+    # ── Profile key normalization (mandatory first step) ────────────────────
+    profile_key = normalize_profile_key(state.get("business_profile_key", DEFAULT_PROFILE_KEY))
 
-    # ── NEW: Profile-aware source pack data ───────────────────────────────────
+    # ── Source pack selection (BEFORE any gap/scoring computation) ─────────
     source_pack = get_source_pack(profile_key)
+    console.print(f"   Pack selected: [cyan]{source_pack.get('label', profile_key)}[/cyan] for profile [cyan]{profile_key}[/cyan]")
     
     # ── FIXED: Parse structured URLs directly to guarantee LLM-free metrics ──
     owned_count = 0
@@ -150,11 +154,15 @@ def process(state: dict) -> dict:
     forum_count = 0
     review_count = 0
     directory_count = 0
-    unknown_count = 0
+    unclassified_count = 0
+    noise_count = 0
 
     brand_domain = state.get("url", "").replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
+    brand_name = state.get("brand_name", "")
     
-    family_breakdown: dict = {f: 0 for f, _ in _FAMILY_TO_LEGACY_BUCKET.items()}
+    family_breakdown: dict = {f: 0 for f, _ in _FAMILY_TO_LEGACY_BUCKET.items() if f != "unknown"}
+    family_breakdown["ignored_noise"] = 0
+    family_breakdown["unclassified_candidate"] = 0
     
     # Process canonically aggregated structured sources
     all_source_urls = get_canonical_source_urls(state)
@@ -164,21 +172,22 @@ def process(state: dict) -> dict:
         if not url:
             continue
             
-        family, _ = classify_url_to_family(url, brand_domain)
+        family, _ = classify_url_to_family(url, brand_domain, brand_name)
         family_breakdown[family] = family_breakdown.get(family, 0) + 1
         
-        legacy_bucket = _FAMILY_TO_LEGACY_BUCKET.get(family, "unknown")
+        legacy_bucket = _FAMILY_TO_LEGACY_BUCKET.get(family, "unclassified")
         if legacy_bucket == "owned": owned_count += 1
         elif legacy_bucket == "editorial": earned_count += 1
         elif legacy_bucket == "forum": forum_count += 1
         elif legacy_bucket == "review": review_count += 1
         elif legacy_bucket == "directory": directory_count += 1
-        else: unknown_count += 1
+        elif legacy_bucket == "noise": noise_count += 1
+        else: unclassified_count += 1
 
     total_sources = sum([
         owned_count, earned_count, forum_count,
-        review_count, directory_count, unknown_count
-    ])
+        review_count, directory_count, unclassified_count
+    ]) # Exclude noise from total sources
 
     first_party_inferred: list = earned_media.get("first_party_inferred_families", [])
 
@@ -191,7 +200,7 @@ def process(state: dict) -> dict:
     first_party_app_detected = any(k in full_text for k in ["al:ios:app_store_id", "al:android:package", "app store", "google play"])
     first_party_partner_detected = any(k in full_text for k in ["diventa partner", "rider", "lavora con noi", "diventa nostro partner", "consegna con noi", "become a partner", "delivery partner"])
 
-    if profile_key == "marketplace":
+    if normalize_profile_key(profile_key) == "marketplace_aggregator":
         if first_party_app_detected:
             first_party_inferred.append({"family": "app_ecosystems", "tag": "first_party"})
             
@@ -227,7 +236,6 @@ def process(state: dict) -> dict:
         source_pack=source_pack,
     )
 
-    # ── Citation risks (profile-aware missing gaps) ────────────────────────────
     citation_risks = _evaluate_citation_risk(
         earned_count=earned_count,
         review_count=review_count,
@@ -237,6 +245,8 @@ def process(state: dict) -> dict:
         profile_key=profile_key,
         missing_relevant=missing_relevant if missing_relevant else None,
     )
+
+
 
     # ── Source detection notes ─────────────────────────────────────────────────
     notes_parts = []
@@ -260,14 +270,29 @@ def process(state: dict) -> dict:
     if irrelevant_ignored:
         notes_parts.append(f"Irrelevant source families intentionally excluded from gap analysis: {', '.join(irrelevant_ignored[:4])}.")
 
+    # Determine trust_mix label for validator consumption
+    trust_mix_label = "Unknown"
+    if trust_mix_summary:
+        tms_lower = trust_mix_summary.lower()
+        if "strong" in tms_lower:
+            trust_mix_label = "Strong"
+        elif "moderate" in tms_lower:
+            trust_mix_label = "Moderate"
+        elif "weak" in tms_lower:
+            trust_mix_label = "Weak"
+        elif "no external" in tms_lower or "echo chamber" in tms_lower:
+            trust_mix_label = "Critical"
+
     state["source_taxonomy"] = {
-        # ── Preserved outputs (backward compat) ──
-        "owned_count":          owned_count,
-        "earned_count":         earned_count,
-        "forum_count":          forum_count,
-        "review_count":         review_count,
-        "directory_count":      directory_count,
-        "unknown_count":        unknown_count,
+        "total_sources_detected": total_sources,
+        "owned_count": owned_count,
+        "earned_count": earned_count,
+        "forum_count": forum_count,
+        "review_count": review_count,
+        "directory_count": directory_count,
+        "unclassified_count": unclassified_count,
+        "ignored_noise_count": noise_count,
+        "trust_mix":            trust_mix_label,
         "trust_mix_summary":    trust_mix_summary,
         "citation_source_risk": citation_risks,
         "notes":                " ".join(notes_parts),

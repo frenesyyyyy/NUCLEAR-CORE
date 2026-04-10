@@ -48,61 +48,9 @@ _FAMILY_TO_LEGACY_BUCKET: dict[str, str] = {
     "employer_workforce_reputation": "review",
     "social_proof_platforms": "review",
     "owned": "owned",
-    "unknown": "unknown",
+    "ignored_noise": "noise",
+    "unclassified_candidate": "unclassified",
 }
-
-# Maps hostname patterns → mention bucket type.
-# Ordered so more specific patterns are checked first.
-_DOMAIN_BUCKET_MAP: list[tuple[str, str]] = [
-    # ── Review platforms ──────────────────────────────────────────────────────
-    ("trustpilot.com",   "review"),
-    ("g2.com",           "review"),
-    ("capterra.com",     "review"),
-    ("getapp.com",       "review"),
-    ("softwareadvice.com","review"),
-    ("tripadvisor.",     "review"),
-    ("yelp.com",         "review"),
-    ("reviews.io",       "review"),
-    ("sitejabber.com",   "review"),
-    ("producthunt.com",  "review"),
-    ("g.page",           "review"),
-    ("maps.google.",     "review"),
-    ("paginegialle.it",  "directory"),
-    ("miodottore.it",    "review"),
-    ("idoctors.it",      "review"),
-    ("prontopro.it",     "review"),
-    ("trovadentisti.it", "review"),
-    ("paginebianche.it", "directory"),
-    ("denuncia.it",      "forum"),
-    # ── Directories ──────────────────────────────────────────────────────────
-    ("crunchbase.com",   "directory"),
-    ("linkedin.com",     "directory"),
-    ("bloomberg.com",    "editorial"),
-    ("clutch.co",        "directory"),
-    ("dnb.com",          "directory"),
-    ("kompass.com",      "directory"),
-    ("manta.com",        "directory"),
-    # ── Editorial / Press ─────────────────────────────────────────────────────
-    ("techcrunch.com",   "editorial"),
-    ("wired.com",        "editorial"),
-    ("forbes.com",       "editorial"),
-    ("guardian.com",     "editorial"),
-    ("corriere.it",      "editorial"),
-    ("ilsole24ore.com",  "editorial"),
-    ("repubblica.it",    "editorial"),
-    ("medium.com",       "editorial"),
-    ("substack.com",     "editorial"),
-    # ── Forums / Communities ─────────────────────────────────────────────────
-    ("reddit.com",       "forum"),
-    ("news.ycombinator.com", "forum"),
-    ("quora.com",        "forum"),
-    ("stackoverflow.com","forum"),
-    ("discord.com",      "forum"),
-    ("twitter.com",      "forum"),
-    ("x.com",            "forum"),
-    ("facebook.com",     "forum"),
-    ("instagram.com",    "forum"),
-]
 
 # Bucket weights for strength score (0–100 scale)
 _BUCKET_WEIGHTS: dict[str, float] = {
@@ -111,7 +59,8 @@ _BUCKET_WEIGHTS: dict[str, float] = {
     "directory": 1.5,   # Entity disambiguation value
     "forum":     1.0,   # Indirect mention signal
     "owned":     0.5,   # Low external value — self-published
-    "unknown":   0.5,   # Uncategorised
+    "unclassified": 0.5,
+    "noise":     0.0,
 }
 
 # Reputation risk signals in domain hostnames
@@ -134,36 +83,14 @@ def _extract_hostname(url: str) -> str:
         return ""
 
 
-def _classify_url(url: str, brand_domain: str) -> str:
+def _classify_url(url: str, brand_domain: str, brand_name: str = None) -> str:
     """
-    Classify a single URL into a mention bucket.
-
-    Priority order:
-    1. Owned (contains brand domain)
-    2. Known domain map
-    3. Unknown fallback
-
-    Args:
-        url: The source URL to classify.
-        brand_domain: The brand's own hostname for owned detection.
-
-    Returns:
-        Bucket label string.
+    Categorize a URL into a high-level reputational bucket by deriving it 
+    from the canonical cross-node family classifier. This ensures buckets
+    and families never drift out of sync.
     """
-    hostname = _extract_hostname(url)
-    if not hostname:
-        return "unknown"
-
-    # Owned detection
-    if brand_domain and brand_domain in hostname:
-        return "owned"
-
-    # Pattern-based classification
-    for pattern, bucket in _DOMAIN_BUCKET_MAP:
-        if pattern in hostname:
-            return bucket
-
-    return "unknown"
+    family, _ = classify_url_to_family(url, brand_domain, brand_name)
+    return _FAMILY_TO_LEGACY_BUCKET.get(family, "unclassified")
 
 
 def _has_negative_signals(url: str) -> bool:
@@ -202,7 +129,7 @@ def _compute_strength_score(
 
     Args:
         source_breakdown: Dict mapping bucket name → count.
-        total_sources: Total number of classified sources.
+        total_sources: Total number of classified sources (excluding noise).
 
     Returns:
         Integer score 0–100.
@@ -213,6 +140,7 @@ def _compute_strength_score(
     raw = sum(
         count * _BUCKET_WEIGHTS.get(bucket, 0.5)
         for bucket, count in source_breakdown.items()
+        if bucket != "noise"
     )
     # Normalize: cap at 100 using a soft ceiling of 30 weighted points = 100
     normalized = min(100, int((raw / 30.0) * 100))
@@ -221,18 +149,16 @@ def _compute_strength_score(
 
 def _compute_reputation_risk_score(
     negative_count: int,
-    review_count: int,
     total_sources: int,
 ) -> int:
     """
     Compute a 0-100 reputation risk score.
 
-    Higher = more at risk. Based on ratio of negative signals vs reviews.
+    Higher = more at risk. Based on ratio of negative signals vs total sources.
 
     Args:
         negative_count: Number of URLs with negative patterns.
-        review_count: Total review-bucket sources.
-        total_sources: Total sources.
+        total_sources: Total sources (excluding noise).
 
     Returns:
         Integer score 0–100.
@@ -292,15 +218,10 @@ def process(state: dict) -> dict:
     console.print("[bold blue]Node: Earned Media[/bold blue] | Analysing off-site brand trust signals...")
 
     brand_name: str        = state.get("brand_name", "Unknown Brand")
-    target_industry: str   = state.get("target_industry", "Unknown")
-    location: str          = state.get("discovered_location", "Unknown")
-    profile: dict          = state.get("business_profile", {})
-    raw_data: dict         = state.get("raw_data_complete", {})
-    external_sources_raw: list = state.get("external_sources_raw", [])
-    url: str               = state.get("url", "")
     profile_key: str       = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
+    url: str               = state.get("url", "")
 
-    brand_domain = _infer_brand_domain(url)
+    inferred_domain = _infer_brand_domain(url)
 
     # Load profile-aware source pack
     source_pack = get_source_pack(profile_key)
@@ -321,10 +242,13 @@ def process(state: dict) -> dict:
 
     # ── Classify each source URL ─────────────────────────────────────────────
     mentions: list[dict[str, Any]] = []
-    source_breakdown: dict[str, int] = {
-        "review": 0, "editorial": 0, "forum": 0,
-        "directory": 0, "owned": 0, "unknown": 0,
-    }
+    earned_count = 0
+    review_count = 0
+    forum_count = 0
+    directory_count = 0
+    owned_count = 0
+    unclassified_count = 0
+    noise_count = 0
     family_breakdown: dict[str, int] = {}
     negative_count = 0
 
@@ -332,10 +256,23 @@ def process(state: dict) -> dict:
         if not src_url:
             continue
 
-        bucket = _classify_url(src_url, brand_domain)
-        source_breakdown[bucket] = source_breakdown.get(bucket, 0) + 1
+        bucket = _classify_url(src_url, inferred_domain, brand_name)
+        if bucket == "noise":
+            noise_count += 1
+        elif bucket == "unclassified":
+            unclassified_count += 1
+        elif bucket == "owned":
+            owned_count += 1
+        elif bucket == "forum":
+            forum_count += 1
+        elif bucket == "review":
+            review_count += 1
+        elif bucket == "directory":
+            directory_count += 1
+        elif bucket == "editorial":
+            earned_count += 1
 
-        family, _ = classify_url_to_family(src_url, brand_domain)
+        family, _ = classify_url_to_family(src_url, inferred_domain)
         family_breakdown[family] = family_breakdown.get(family, 0) + 1
 
         has_neg = _has_negative_signals(src_url)
@@ -349,28 +286,41 @@ def process(state: dict) -> dict:
             "negative_signal": has_neg,
         })
 
+    source_breakdown = {
+        "earned_editorial": earned_count,
+        "review_sentiment": review_count,
+        "forum_community": forum_count,
+        "directory_listing": directory_count,
+        "owned_property": owned_count,
+        "unclassified": unclassified_count,
+        "noise": noise_count,
+    }
+
+    # IMPORTANT: Noise is entirely excluded from the denominator.
+    total_sources = sum(count for bucket, count in source_breakdown.items() if bucket != "noise")
+
     # Apply extensibility hook (no-op in current layer)
     mentions = _enrich_mentions_hook(mentions, state)
 
-    total = len(mentions)
-    strength = _compute_strength_score(source_breakdown, total)
-    profile_aware_strength = compute_profile_aware_strength(family_breakdown, pack_weights, total)
-    rep_risk = _compute_reputation_risk_score(negative_count, source_breakdown.get("review", 0), total)
-    warning_effect = negative_count > 0 and (negative_count / max(total, 1)) >= 0.10
+    strength = _compute_strength_score(source_breakdown, total_sources)
+    profile_aware_strength = compute_profile_aware_strength(family_breakdown, pack_weights, total_sources)
+    rep_risk = _compute_reputation_risk_score(negative_count, total_sources)
+
+    warning_effect = negative_count > 0 and (negative_count / max(total_sources, 1)) >= 0.10
 
     # ── Build notes ─────────────────────────────────────────────────────────
     notes_parts: list[str] = []
-    if total == 0:
+    if total_sources == 0:
         notes_parts.append("No external sources detected. Earned media analysis is limited to structural signals.")
     else:
         top_buckets = sorted(source_breakdown.items(), key=lambda x: x[1], reverse=True)
-        top_label = top_buckets[0][0] if top_buckets else "unknown"
+        top_label = top_buckets[0][0] if top_buckets else "unclassified"
         notes_parts.append(f"Dominant mention type: '{top_label}' ({top_buckets[0][1]} sources).")
     if warning_effect:
         notes_parts.append(
-            f"Warning effect risk detected: {negative_count}/{total} sources contain negative signals."
+            f"Warning effect risk detected: {negative_count}/{total_sources} sources contain negative signals."
         )
-    if source_breakdown.get("review", 0) == 0 and total > 0:
+    if source_breakdown.get("review", 0) == 0 and total_sources > 0:
         notes_parts.append("No review-platform mentions found. Trust signal coverage is weak.")
     notes = " ".join(notes_parts)
 

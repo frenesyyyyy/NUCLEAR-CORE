@@ -1,12 +1,12 @@
 """
-Business Intelligence Layer — 6 Canonical Agency Profiles.
+Business Intelligence Layer — 8 Canonical Agency Profiles.
 
 Defines the authoritative profile registry for the GEO pipeline.
 Every downstream node MUST import DEFAULT_PROFILE_KEY from this module
 for its .get() fallbacks instead of hardcoding strings.
 
 Profile Architecture:
-  - 6 canonical keys (the ONLY keys a pipeline should actively select)
+  - 8 canonical keys (the ONLY keys a pipeline should actively use)
   - Legacy Alias Router (maps retired/transitional keys to canonical ones)
 """
 
@@ -16,7 +16,7 @@ Profile Architecture:
 DEFAULT_PROFILE_KEY = "b2b_saas_tech"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6 Canonical Agency Profiles
+# 8 Canonical Agency Profiles
 # ─────────────────────────────────────────────────────────────────────────────
 
 BUSINESS_INTELLIGENCE_PROFILES = {
@@ -62,11 +62,11 @@ BUSINESS_INTELLIGENCE_PROFILES = {
     },
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 2. Local Service / YMYL
+    # 2a. Local Healthcare / YMYL
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    "local_service_ymyl": {
-        "label": "Local Service / YMYL",
-        "macro_industry": "Healthcare & Local Services",
+    "local_healthcare_ymyl": {
+        "label": "Local Healthcare / Medical",
+        "macro_industry": "Healthcare & Medical Services",
         "geo_behavior": "proximity_trust",
         "query_style": "medical_trust",
         "scale_default": "Local",
@@ -74,8 +74,8 @@ BUSINESS_INTELLIGENCE_PROFILES = {
         "stress_test_budget": {"blind": 5, "contextual": 7, "branded": 8},
         "serper_mode": "local_leaders",
         "allowed_schema_types": [
-            "LocalBusiness", "Person", "MedicalBusiness",
-            "PostalAddress", "Dentist", "Physician",
+            "LocalBusiness", "MedicalBusiness",
+            "PostalAddress", "Dentist", "Physician", "FAQPage"
         ],
         "must_have_signals": [
             "city/location mentions", "doctor/practitioner bios",
@@ -92,12 +92,52 @@ BUSINESS_INTELLIGENCE_PROFILES = {
             {"persona": "Insurance Researcher", "intent": "comparison"},
         ],
         "blind_fallback_templates": {
-            "en": ["best local specialist near me", "trusted clinic nearby", "urgent local service"],
-            "it": ["miglior specialista in zona", "clinica affidabile vicino a me", "servizio locale urgente"],
+            "en": ["best local specialist near me", "trusted clinic nearby", "urgent medical care"],
+            "it": ["miglior specialista in zona", "clinica affidabile vicino a me", "guardia medica urgente"],
         },
         "contextual_fallback_templates": {
-            "en": ["cost of local service", "how to choose the best clinic"],
-            "it": ["costo del servizio locale", "come scegliere la migliore clinica"],
+            "en": ["cost of medical consultation", "how to choose the best clinic"],
+            "it": ["costo della visita medica", "come scegliere la migliore clinica"],
+        },
+    },
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 2b. Local Legal / YMYL
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "local_legal_ymyl": {
+        "label": "Local Legal Services",
+        "macro_industry": "Legal & Official Services",
+        "geo_behavior": "proximity_authority",
+        "query_style": "legal_authority",
+        "scale_default": "Local",
+        "location_enforce": True,
+        "stress_test_budget": {"blind": 5, "contextual": 7, "branded": 8},
+        "serper_mode": "local_leaders",
+        "allowed_schema_types": [
+            "LegalService", "Organization", "LocalBusiness",
+            "PostalAddress", "Person",
+        ],
+        "must_have_signals": [
+            "city/location mentions", "attorney bios",
+            "bar association registry", "NAP consistency", "consultation forms",
+        ],
+        "scoring_weights": {
+            "eeat_trust": 0.50,
+            "local_entities": 0.30,
+            "technical": 0.20,
+        },
+        "persona_templates": [
+            {"persona": "Defendant / Client", "intent": "defense"},
+            {"persona": "Family Legal Seeker", "intent": "planning"},
+            {"persona": "Business Owner", "intent": "compliance"},
+        ],
+        "blind_fallback_templates": {
+            "en": ["best local lawyer near me", "trusted law firm nearby", "urgent legal counsel"],
+            "it": ["miglior avvocato in zona", "studio legale affidabile vicino a me", "consulenza legale urgente"],
+        },
+        "contextual_fallback_templates": {
+            "en": ["cost of legal consultation", "how to choose a good lawyer"],
+            "it": ["costo della consulenza legale", "come scegliere un buon avvocato"],
         },
     },
 
@@ -347,15 +387,23 @@ _LEGACY_ALIASES = {
     # B2B / SaaS variants
     "b2b_saas":             "b2b_saas_tech",
     "consumer_saas":        "b2b_saas_tech",
-    "marketplace":          "b2b_saas_tech",
     "tech":                 "b2b_saas_tech",
     "software":             "b2b_saas_tech",
 
-    # Local / YMYL variants
-    "local_dentist":        "local_service_ymyl",
-    "local_law_firm":       "local_service_ymyl",
-    "dentist":              "local_service_ymyl",
-    "healthcare":           "local_service_ymyl",
+    # Healthcare / YMYL variants
+    "local_dentist":        "local_healthcare_ymyl",
+    "dentist":              "local_healthcare_ymyl",
+    "healthcare":           "local_healthcare_ymyl",
+    
+    # Legal / YMYL variants
+    "local_law_firm":       "local_legal_ymyl",
+    "legal":                "local_legal_ymyl",
+    "lawyer":               "local_legal_ymyl",
+    "law_firm":             "local_legal_ymyl",
+
+    # DEPRECATED / Legacy blending variants
+    "local_service":        "local_healthcare_ymyl",
+    "general_local_business": "hospitality_travel", # Rerouted general fallback
 
     # E-commerce variants
     "ecommerce_brand":      "ecommerce_retail",
@@ -380,7 +428,52 @@ _LEGACY_ALIASES = {
     "local_tech_provider":       "professional_services",
     "freelancer":                "professional_services",
     "consulting":                "professional_services",
+
+    # Marketplace / Aggregator variants
+    "marketplace":          "marketplace_aggregator",
+    "aggregator":           "marketplace_aggregator",
+    "platform":             "marketplace_aggregator",
+
+    # Education variants
+    "university":           "education_institution",
+    "school":               "education_institution",
+    "course":               "education_institution",
 }
 
-for _alias, _canonical in _LEGACY_ALIASES.items():
-    BUSINESS_INTELLIGENCE_PROFILES[_alias] = BUSINESS_INTELLIGENCE_PROFILES[_canonical]
+
+def normalize_profile_key(key: str) -> str:
+    """
+    Normalizes a given profile key to its canonical form from BUSINESS_INTELLIGENCE_PROFILES.
+    If the key is legacy, it routes via _LEGACY_ALIASES.
+    If the key is entirely unknown, it falls back to DEFAULT_PROFILE_KEY.
+    """
+    if not key or not isinstance(key, str):
+        return DEFAULT_PROFILE_KEY
+        
+    k = key.lower().strip()
+    if k in BUSINESS_INTELLIGENCE_PROFILES:
+        return k
+        
+    if k in _LEGACY_ALIASES:
+        return _LEGACY_ALIASES[k]
+        
+    return DEFAULT_PROFILE_KEY
+
+
+def assert_valid_profile_key(key: str) -> None:
+    """
+    Validates that a provided key belongs to the canonical registry.
+    This does NOT check legacy aliases - the key should be normalized FIRST before calling this.
+    """
+    if key not in BUSINESS_INTELLIGENCE_PROFILES:
+        raise ValueError(f"Invalid canonical profile key '{key}'. Valid keys: {list(BUSINESS_INTELLIGENCE_PROFILES.keys())}")
+
+
+def get_platform_like_profiles() -> set[str]:
+    """Returns canonical profiles that behave like platforms, marketplaces, or large online catalogs."""
+    return {"marketplace_aggregator", "ecommerce_retail", "b2b_saas_tech"}
+
+
+def get_local_trust_profiles() -> set[str]:
+    """Returns canonical profiles tied to physical local footprints or local subjective trust/ratings."""
+    return {"local_healthcare_ymyl", "local_legal_ymyl", "hospitality_travel", "professional_services"}

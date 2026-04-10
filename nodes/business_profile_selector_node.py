@@ -42,23 +42,15 @@ def process(state: dict) -> dict:
         )
 
         # ── DEFENSIVE SEMANTIC GUARD (v4.5 Hotfix) ──
-        if key == "local_law_firm":
+        if key in ("local_healthcare_ymyl", "local_legal_ymyl"):
             hazard_tokens = ["food", "delivery", "restaurant", "ristorante", "trattoria", "pizza", "burger", "meal", "menu"]
             evidence_str = str(target_industry).lower() + " " + str(business_type).lower() + " " + extra_context.get("client_content_clean", "")[:2000].lower()
             
             if any(t in evidence_str for t in hazard_tokens):
-                console.log(f"   [yellow]Hazard Detected[/yellow] | Semantic conflict! Overriding strict legal check and re-running.")
-                key, metadata = select_business_profile(
-                    business_type=business_type,
-                    target_industry=target_industry,
-                    scale_level=scale_level,
-                    schema_type_counts=schema_type_counts,
-                    discovered_location=discovered_location,
-                    extra_context=extra_context,
-                    ignore_legal=True
-                )
+                console.log(f"   [yellow]Hazard Detected[/yellow] | Semantic conflict! Overriding strict YMYL check and falling back.")
+                key = "hospitality_travel"
                 metadata["reliability"] = "low"
-                metadata["evidence"].append("Semantic boundary conflict detected (food/restaurant keywords found on putative legal entity). Legal override was forcefully BLOCKED.")
+                metadata["evidence"].append("Semantic boundary conflict detected (food/restaurant keywords found on putative YMYL entity). Hospitality fallback applied.")
 
         # 4. Load the profile object safely preventing global template mutation
         profile = copy.deepcopy(BUSINESS_INTELLIGENCE_PROFILES.get(key, BUSINESS_INTELLIGENCE_PROFILES.get(DEFAULT_PROFILE_KEY)))
@@ -71,6 +63,7 @@ def process(state: dict) -> dict:
             "classification_evidence": metadata.get("evidence", []),
             "business_profile_summary": {
                 "label": profile.get("label"),
+                "canonical_key": key,
                 "macro_industry": profile.get("macro_industry"),
                 "reliability_score": metadata.get("reliability", "low"),
                 "evidence_signals": metadata.get("evidence", [])

@@ -9,7 +9,7 @@ while removing placeholder engines by default.
 from typing import Any
 from rich.console import Console
 from nodes.source_matrix import get_profile_scoring_weights
-from nodes.business_profiles import DEFAULT_PROFILE_KEY
+from nodes.business_profiles import DEFAULT_PROFILE_KEY, normalize_profile_key, get_platform_like_profiles
 
 console = Console()
 
@@ -120,6 +120,7 @@ def process(state: dict) -> dict:
     earned_media    = state.get("earned_media", {})
     source_taxonomy = state.get("source_taxonomy", {})
     profile_key     = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
+    profile_key     = normalize_profile_key(profile_key)
     rep_risk        = earned_media.get("reputation_risk_score", 0)
 
     # 1. Tiered Share of Model (Raw Visibility)
@@ -132,7 +133,7 @@ def process(state: dict) -> dict:
     auth_match = state.get("authority_match_score", 0)
     brand_strength = earned_media.get("profile_aware_strength", earned_media.get("strength_score", 0))
     
-    PLATFORM_LIKE_PROFILES = {"marketplace", "consumer_saas", "ecommerce_brand"}
+    PLATFORM_LIKE_PROFILES = get_platform_like_profiles()
     inferred_families = state.get("earned_media", {}).get("first_party_inferred_families", [])
     if profile_key in PLATFORM_LIKE_PROFILES and inferred_families:
         rescue_pts = 0
@@ -148,8 +149,7 @@ def process(state: dict) -> dict:
 
     # 3. Authority-Adjusted Visibility
     # Uses the prescribed scaling to prevent zero-crush where discovery works but authority is developing
-    PLATFORM_PROFILES = {"marketplace", "consumer_saas", "ecommerce_brand"}
-    if profile_key in PLATFORM_PROFILES:
+    if profile_key in PLATFORM_LIKE_PROFILES:
         authority_adjusted_visibility_score = raw_visibility_score * (0.7 + 0.3 * (authority_composite / 100))
     else:
         authority_adjusted_visibility_score = raw_visibility_score * (0.5 + 0.5 * (authority_composite / 100))

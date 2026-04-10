@@ -221,7 +221,8 @@ def _build_blind_queries(
     locale: str,
     gemini_client,
     budget: int = 8,
-    service_zones: list = None
+    service_zones: list = None,
+    profile_key: str = "unknown"
 ) -> list:
     """
     Tier 1: Blind Discovery.
@@ -250,6 +251,12 @@ def _build_blind_queries(
             4. {lang_rule}
             5. Output ONLY a JSON array of strings: ["query1", "query2", ...]{geo_rule}{geo_isolation}
             8. LOCATION FORMAT: When appending geographical locations to queries, use natural local prepositions (e.g., 'in [Location]', 'near [Location]', 'a [Location]' for Italian). NEVER output raw concatenated comma-separated strings like 'a , Italia Roma'.
+            
+            CRITICAL QUERY GENERATION RULES:
+            1. ORGANIC LOCALE ENFORCEMENT: All generated queries MUST be written entirely in the target locale ({locale}). Do NOT mix languages.
+            2. ORGANIC LOCATION INTEGRATION: Do not naively append the location at the end of the string. Weave the location ({location}) into the query exactly as a human user would type it in that language (e.g., 'dentista urgente milano', NOT 'dentista urgente Multiple locations').
+            3. INTENT ANCHORING: Strictly align the search queries with the actual service/product provided by the business profile ({profile_key}). If the business is a local service (like a clinic or restaurant), DO NOT generate queries looking for B2B software, SaaS, or management platforms.
+            4. STRICT GEO-FENCING: You will be provided with a 'service_zones' array {service_zones}. If this array is populated, you MUST ONLY generate localized queries for the exact cities in that list. DO NOT invent or add other major cities (e.g., if the list is [Milano, Roma], absolutely do NOT generate queries for Napoli, Torino, or Palermo).
             
             Seeds: {json.dumps(seeds)}
             """
@@ -280,7 +287,8 @@ def _build_contextual_queries(
     gemini_client,
     budget: int = 10,
     persona_templates: list = None,
-    service_zones: list = None
+    service_zones: list = None,
+    profile_key: str = "unknown"
 ) -> list:
     """
     Tier 2: Contextual Discovery.
@@ -314,6 +322,13 @@ def _build_contextual_queries(
         4. {lang_rule}{persona_context}
         5. Output ONLY JSON: {{"questions": ["...", "..."]}}{geo_rule}{geo_isolation}
         8. LOCATION FORMAT: When appending geographical locations to contextual queries, use natural local prepositions (e.g., 'in [Location]', 'near [Location]', 'a [Location]' for Italian). NEVER output raw concatenated comma-separated strings like 'a , Italia Roma'.
+        
+        CRITICAL QUERY GENERATION RULES:
+        1. ORGANIC LOCALE ENFORCEMENT: All generated queries MUST be written entirely in the target locale ({locale}). Do NOT mix languages.
+        2. ORGANIC LOCATION INTEGRATION: Do not naively append the location at the end of the string. Weave the location ({location}) into the query exactly as a human user would type it in that language (e.g., 'dentista urgente milano', NOT 'dentista urgente Multiple locations').
+        3. INTENT ANCHORING: Strictly align the search queries with the actual service/product provided by the business profile ({profile_key}). If the business is a local service (like a clinic or restaurant), DO NOT generate queries looking for B2B software, SaaS, or management platforms.
+        4. STRICT GEO-FENCING: You will be provided with a 'service_zones' array {service_zones}. If this array is populated, you MUST ONLY generate localized queries for the exact cities in that list. DO NOT invent or add other major cities (e.g., if the list is [Milano, Roma], absolutely do NOT generate queries for Napoli, Torino, or Palermo).
+        5. CONSUMER REALISM (T2 Queries): Ensure T2 Contextual queries reflect how normal, everyday people search for solutions. Avoid overly academic or "tech-bro" phrasing. (e.g., use 'dove fare un check-up completo', NOT 'piani di prevenzione personalizzati con intelligenza artificiale').
         
         Gaps: {json.dumps(gaps)}
         """
@@ -751,8 +766,9 @@ def process(state: dict) -> dict:
 
         # Query Generation
         loc_conf = state.get("location_confidence", "high")
-        t1_raw = _build_blind_queries(faq_patterns_st, authority_ents_st, brand_tokens, is_local, discovered_location, locale, gemini_client_st, STRESS_TEST_BUDGET["blind"], service_zones)
-        t2_raw = _build_contextual_queries(topic_gaps_st, brand_tokens, is_local, discovered_location, locale, gemini_client_st, STRESS_TEST_BUDGET["contextual"], state.get("business_profile", {}).get("persona_templates", []), service_zones)
+        profile_key = state.get("business_profile_key", "unknown")
+        t1_raw = _build_blind_queries(faq_patterns_st, authority_ents_st, brand_tokens, is_local, discovered_location, locale, gemini_client_st, STRESS_TEST_BUDGET["blind"], service_zones, profile_key)
+        t2_raw = _build_contextual_queries(topic_gaps_st, brand_tokens, is_local, discovered_location, locale, gemini_client_st, STRESS_TEST_BUDGET["contextual"], state.get("business_profile", {}).get("persona_templates", []), service_zones, profile_key)
         
         # Patch query calls to include location_confidence
         for q_obj in t1_raw:
@@ -987,9 +1003,13 @@ def process(state: dict) -> dict:
         MANDATORY RULES:
         - Ground EVERY recommendation in market data.
         - If integrity_status is not 'valid', tag titles with [PROVISIONAL].
+        - Every recommendation MUST include:
+          - "evidence_origin": ("on_site" | "off_site" | "query_gap" | "profile_inference" | "mixed")
+          - "evidence_confidence": ("high" | "medium" | "low")
+          - "supporting_signals": [list of 1-3 concrete evidence strings]
         - Output language: {lang_name}
         
-        Return STRICTLY a JSON array of objects with keys: title, rationale, priority, implementation_type.
+        Return STRICTLY a JSON array of objects with keys: title, rationale, priority, implementation_type, evidence_origin, evidence_confidence, supporting_signals.
         """
         gemini_client = genai.Client(api_key=gemini_key)
         res_rec = gemini_client.models.generate_content(model='gemini-2.5-flash-lite', contents=rec_prompt, config={"response_mime_type": "application/json"})

@@ -20,7 +20,7 @@ def run_tests():
                 "schema_type_counts": {"Dentist": 1},
                 "discovered_location": "Rome",
             },
-            "expected": "local_service_ymyl",
+            "expected": "local_healthcare_ymyl",
         },
         {
             "name": "Lawyer keyword with local context",
@@ -30,7 +30,7 @@ def run_tests():
                 "schema_type_counts": {},
                 "discovered_location": "Rome",
             },
-            "expected": "local_service_ymyl",
+            "expected": "local_legal_ymyl",
         },
         {
             "name": "Lawyer keyword without local context (still YMYL)",
@@ -40,7 +40,7 @@ def run_tests():
                 "schema_type_counts": {},
                 "discovered_location": "",
             },
-            "expected": "local_service_ymyl",
+            "expected": "local_legal_ymyl",
         },
         {
             "name": "Boutique hotel in Rome",

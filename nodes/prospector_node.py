@@ -6,7 +6,7 @@ import requests
 from rich.console import Console
 from google import genai
 from nodes.api_utils import execute_with_backoff
-from nodes.business_profiles import DEFAULT_PROFILE_KEY
+from nodes.business_profiles import DEFAULT_PROFILE_KEY, normalize_profile_key, get_local_trust_profiles, get_platform_like_profiles
 
 console = Console()
 
@@ -53,13 +53,14 @@ def call_perplexity(system_prompt: str, user_prompt: str, api_key: str) -> str:
 def _is_platform_like_context(state: dict) -> bool:
     """Determine if the audited business is a platform/aggregator to adjust filtering."""
     profile_key = state.get("business_profile_key", "")
+    profile_key = normalize_profile_key(profile_key)
     target_ind = str(state.get("target_industry", "")).lower()
     bus_type = str(state.get("business_type", "")).lower()
     evidence = " ".join(state.get("classification_evidence", [])).lower()
     
     # Structural clues
     platform_keywords = ["marketplace", "platform", "aggregator", "delivery", "booking", "piattaforma", "onboarding", "network"]
-    if profile_key == "marketplace": return True
+    if profile_key in get_platform_like_profiles(): return True
     if any(k in target_ind for k in platform_keywords): return True
     if any(k in bus_type for k in platform_keywords): return True
     if any(k in evidence for k in platform_keywords): return True
@@ -228,6 +229,11 @@ def process(state: dict) -> dict:
             Analyze site evidence to validate industry/brand/location.
             URL: {url} | Initial Brand: {initial_brand} | Initial Industry: {initial_ind}
             On-site Content Fragment: {client_content[:5000]} | Schema: {schema_str}
+            Locale: {locale}
+            
+            CRITICAL RULES:
+            1. 'validated_location' MUST be in the target Locale ({locale}).
+            2. 'validated_location' MUST be a single City and Country (e.g., 'Milano, Italia') OR 'National'. NO conversational text. NO lists of regions.
             
             Return JSON: validated_brand_name, validated_industry, validated_target_audience_summary, validated_persona_matrix, validated_location, classification_notes.
             """
@@ -261,7 +267,8 @@ def process(state: dict) -> dict:
         serper_query = f"top {target_industry} in {discovered_location}" if is_local_candidate else f"top {target_industry} industry leaders"
 
     def generate_external_source_queries(b_name, p_key, b_locale):
-        if p_key == "marketplace":
+        p_key = normalize_profile_key(p_key)
+        if p_key == "marketplace_aggregator":
             return [
                 f"{b_name} app store",
                 f"{b_name} google play",
@@ -272,7 +279,7 @@ def process(state: dict) -> dict:
                 f"{b_name} rider recensioni",
                 f"{b_name} partner ristoranti"
             ]
-        elif p_key in ("b2b_saas_tech", "b2b_saas", "consumer_saas", "local_tech_provider", "professional_services"):
+        elif p_key in ("b2b_saas_tech", "professional_services"):
             return [
                 f"{b_name} g2",
                 f"{b_name} capterra",
@@ -281,7 +288,7 @@ def process(state: dict) -> dict:
                 f"{b_name} integrations",
                 f"{b_name} github"
             ]
-        elif p_key in ("local_law_firm", "local_dentist", "freelancer_consultant", "general_local_business", "restaurant_hospitality"):
+        elif p_key in get_local_trust_profiles().union({"general_local_business"}):
             return [
                 f"{b_name} recensioni",
                 f"{b_name} google maps",
@@ -407,14 +414,34 @@ def process(state: dict) -> dict:
         match = re.search(r'```(?:json)?(.*?)```', raw_intelligence, re.DOTALL | re.IGNORECASE)
         json_str = match.group(1).strip() if match else raw_intelligence.strip()
         intel_data = json.loads(json_str)
+        def _force_flat_strings(raw_list: list) -> list[str]:
+            """Flattens dicts into strings (taking the first value) to prevent downstream join() crashes."""
+            clean = []
+            for item in raw_list:
+                if isinstance(item, str):
+                    clean.append(item.strip())
+                elif isinstance(item, dict):
+                    # Extract the first valid string from the dictionary (e.g. {'name': 'Humanitas'} -> 'Humanitas')
+                    vals = [str(v).strip() for v in item.values() if v]
+                    if vals:
+                        clean.append(vals[0])
+            return clean
+
+        # Extract and sanitize all arrays
+        comp_list = _force_flat_strings(intel_data.get("competitor_entities", []))
+        auth_list = _force_flat_strings(intel_data.get("authority_entities", []))
+        topic_list = _force_flat_strings(intel_data.get("topic_gaps", []))
+        faq_list = _force_flat_strings(intel_data.get("faq_patterns", []))
+
+        # Apply the junk filter to competitors
         junk = ['facebook', 'instagram', 'linkedin', 'twitter', 'amazon', 'youtube']
         if not is_platform_context:
             junk.extend(['yelp', 'tripadvisor', 'booking', 'justeat', 'deliveroo', 'glovo'])
-
-        raw_data_complete["competitor_entities"] = [str(e).strip().lower() for e in intel_data.get("competitor_entities", []) if not any(j in str(e).lower() for j in junk)]
-        raw_data_complete["authority_entities"] = [str(e).strip().lower() for e in intel_data.get("authority_entities", [])]
-        raw_data_complete["topic_gaps"] = intel_data.get("topic_gaps", [])
-        raw_data_complete["faq_patterns"] = intel_data.get("faq_patterns", [])
+            
+        raw_data_complete["competitor_entities"] = [c for c in comp_list if not any(j in c.lower() for j in junk)]
+        raw_data_complete["authority_entities"] = auth_list
+        raw_data_complete["topic_gaps"] = topic_list
+        raw_data_complete["faq_patterns"] = faq_list
         raw_data_complete["perplexity_summary"] = f"Mapped {len(raw_data_complete['competitor_entities'])} competitors."
     except Exception as e:
         console.print(f"[bold red]Intelligence Parsing Failed[/bold red]: {e}")

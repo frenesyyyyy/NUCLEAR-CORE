@@ -1,44 +1,72 @@
-import sys, traceback
-sys.path.insert(0, 'nodes')
-from earned_media_node import process
+import sys
+import traceback
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from nodes.earned_media_node import process
 
 tests = {
-    'test2': {
-        'brand_name': 'Acme CRM', 'target_industry': 'SaaS', 'discovered_location': 'Global',
-        'business_profile': {}, 'raw_data_complete': {
-            'source_urls': ['https://techcrunch.com/2024/01/acme', 'https://forbes.com/acme-review',
-                            'https://g2.com/products/acme', 'https://trustpilot.com/review/acme-crm.com',
-                            'https://reddit.com/r/saas/acme']},
-        'external_sources': ['https://capterra.com/software/acme', 'https://crunchbase.com/organization/acme'],
-        'url': 'https://acme-crm.com',
-        '_assertions': lambda em: (em['source_breakdown']['review'] == 2, em['source_breakdown']['editorial'] == 2, em['source_breakdown']['forum'] == 1, em['source_breakdown']['directory'] == 2),
-    },
-    'test3': {
-        'brand_name': 'Shady', 'target_industry': 'Finance', 'discovered_location': 'Unknown',
-        'business_profile': {}, 'raw_data_complete': {}, 'url': 'https://shadycorp.com',
-        'external_sources': ['https://scam-alert.com/shady-corp', 'https://trustpilot.com/review/shadycorp', 'https://ripoff-report.com/shady'],
-        '_assertions': lambda em: (em['reputation_risk_score'] > 0, em['warning_effect_risk'] == True,),
-    },
-    'test4': {
-        'brand_name': 'Acme', 'target_industry': 'Tech', 'discovered_location': 'Worldwide',
-        'business_profile': {}, 'raw_data_complete': {}, 'url': 'https://acme.com',
-        'external_sources': ['https://acme.com/blog/post', 'https://acme.com/about'],
-        '_assertions': lambda em: (em['source_breakdown']['owned'] == 2, em['strength_score'] < 10,),
+    'noise_split_regression': {
+        'brand_name': 'Acme Dental', 
+        'target_industry': 'Healthcare',
+        'url': 'https://acmedental.com',
+        'business_profile_key': 'local_healthcare_ymyl',
+        'raw_data_complete': {
+            'source_urls': [
+                # 1. Known review/editorial source
+                'https://trustpilot.com/review/acmedental.com',
+                # 2. Owned brand source
+                'https://acmedental.com/about-us',
+                # 3. Generic search/junk URL -> noise
+                'https://google.com/search?q=acme+dental',
+                'https://youtube.com/watch?v=123',
+                # 4. Unrecognized but plausible branded article URL -> unclassified candidate
+                'https://randomlocalblog.net/acmedental-review',
+                # 5. Google Maps path -> classified local/review, not noise
+                'https://maps.google.com/?q=acme+dental+clinic'
+            ]
+        },
+        'external_sources_raw': [],
+        '_assertions': lambda em: (
+            em['source_breakdown']['review_sentiment'] == 2,  # Trustpilot, Maps
+            em['source_breakdown']['owned_property'] == 1,    # acmedental.com
+            em['source_breakdown']['noise'] == 2,             # google.com/search, youtube.com
+            em['source_breakdown']['unclassified'] == 1,      # randomlocalblog.net with 'acmedental' slug
+            # 6. Noisy input set should not inflate total_sources (Total = 6 URLs - 2 noise = 4 sources)
+            (em['source_breakdown']['review_sentiment'] + em['source_breakdown']['owned_property'] + em['source_breakdown']['unclassified']) == 4,
+        ),
     },
 }
 
-for name, state in tests.items():
-    assertions_fn = state.pop('_assertions')
-    try:
-        r = process(state)
-        em = r['earned_media']
-        print(f'{name}: score={em["strength_score"]} risk={em["reputation_risk_score"]} warning={em["warning_effect_risk"]} breakdown={em["source_breakdown"]}')
-        results = assertions_fn(em)
-        for i, res in enumerate(results):
-            if not res:
-                print(f'  ASSERTION {i} FAILED!')
-            else:
-                print(f'  assertion {i} OK')
-    except Exception as e:
-        print(f'{name} EXCEPTION:')
-        traceback.print_exc()
+if __name__ == "__main__":
+    for name, state in tests.items():
+        assertions_fn = state.pop('_assertions')
+        try:
+            print(f'\\n[RUN] {name}')
+            r = process(state)
+            em = r['earned_media']
+            
+            # Debug mention mapping
+            for m in list(em.get("mentions", [])):
+                print(f"Mention Debug: {m.get('url')} -> ?")
+            
+            print(f'Result Breakdown: {em["source_breakdown"]}')
+            
+            results = assertions_fn(em)
+            if not isinstance(results, tuple):
+                results = (results,)
+                
+            all_passed = True
+            for i, res in enumerate(results):
+                if not res:
+                    print(f'  [FAIL] Assertion {i} failed.')
+                    all_passed = False
+                else:
+                    print(f'  [PASS] Assertion {i} OK.')
+                    
+            if all_passed:
+                print(f'=== {name} PASSED ===')
+        except Exception as e:
+            print(f'EXCEPTION in {name}:')
+            traceback.print_exc()

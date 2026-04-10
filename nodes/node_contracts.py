@@ -34,6 +34,9 @@ PROTECTED_KEYS = {
     "validation",
     "roi_verified",
     "validator_notes",
+    "decision_summary",
+    "decision_risks",
+    "decision_next_step",
 }
 
 ALLOWED_WRITE_KEYS = {
