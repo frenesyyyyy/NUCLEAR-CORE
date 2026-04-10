@@ -49,6 +49,9 @@ def _ground_action(action: dict, state: dict, integrity_status: str) -> dict | N
         elif origin == "on_site": signals = ["Direct evidence extracted"]
         else: signals = ["Industry best practice for profile"]
 
+    if len(signals) == 1 and len(signals[0]) < 10:
+        return None
+
     # ── 3. Agency Mode Suppression ──
     strict_mode = state.get("agency_strict_mode", False)
     if strict_mode and confidence == "low" and action.get("priority") != "Critical":
@@ -96,25 +99,50 @@ def _generate_page_actions(missing_pages: list, state: dict, integrity_status: s
 def _generate_trust_actions(trust_gaps: list, state: dict, integrity_status: str) -> list[dict]:
     actions = []
     for g in trust_gaps:
-        raw = {
-            "action_title": f"Integrate Trust Anchor: {g[0]}",
-            "why_it_matters": g[1],
-            "expected_impact": "Hardens entity validation.",
-            "priority": "Critical" if any(k in str(g[0]).upper() for k in ["IVA", "PEC", "ADDRESS", "LEGAL"]) else "High",
-            "action_type": "E-E-A-T Hardening"
-        }
-        if len(g) >= 5:
-            raw.update({
-                "evidence_origin": g[2],
-                "evidence_confidence": g[3],
-                "supporting_signals": g[4]
-            })
+        if isinstance(g, dict):
+            status = g.get("status", "missing")
+            signal = g.get("signal", "Unknown")
+            origin = g.get("evidence_origin", "on_site")
+            conf = g.get("evidence_confidence", "low")
+            sigs = g.get("supporting_signals", [])
+        elif isinstance(g, list) and len(g) >= 1:
+            signal = g[0]
+            status = "missing"
+            origin = g[2] if len(g) >= 3 else "profile_inference"
+            conf = g[3] if len(g) >= 4 else "low"
+            sigs = g[4] if len(g) >= 5 else [f"Missing {signal}"]
         else:
-            raw.update({
-                "evidence_origin": "on_site" if integrity_status == "valid" else "profile_inference",
-                "evidence_confidence": "high" if integrity_status == "valid" else "low",
-                "supporting_signals": [f"Missing {g[0]}"]
-            })
+            continue
+
+        if status not in ["missing", "present_unstructured", "present_but_not_machine_readable"]:
+            continue
+
+        if status == "missing":
+            priority = "Critical"
+            action_title = f"Integrate Trust Anchor: {signal}"
+            why_it_matters = f"Critical absence of {signal} breaks fundamental entity validation."
+            impact = "Hardens entity validation and legal integrity."
+        elif status == "present_unstructured":
+            priority = "High"
+            action_title = f"Expose {signal} into Semantic UI Elements"
+            why_it_matters = f"{signal} found loosely in text but not exposed correctly for efficient bot crawling."
+            impact = "Improves crawler accessibility for trust anchors."
+        else: # present_but_not_machine_readable
+            priority = "Medium"
+            action_title = f"Inject JSON-LD Schema for {signal}"
+            why_it_matters = f"{signal} exists securely on the UI but lacks semantic Organization/LocalBusiness markup."
+            impact = "Guarantees deterministic entity extraction by LLM crawlers."
+
+        raw = {
+            "action_title": action_title,
+            "why_it_matters": why_it_matters,
+            "expected_impact": impact,
+            "priority": priority,
+            "action_type": "E-E-A-T Hardening",
+            "evidence_origin": origin,
+            "evidence_confidence": conf,
+            "supporting_signals": sigs
+        }
             
         grounded = _ground_action(raw, state, integrity_status)
         if grounded: actions.append(grounded)

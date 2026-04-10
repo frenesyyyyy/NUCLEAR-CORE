@@ -30,14 +30,14 @@ PROFILE_KEYWORDS: dict[str, list[str]] = {
 
     "local_healthcare_ymyl": [
         # EN
-        "dentist", "clinic", "doctor", "health", "medical",
+        "dentist", "clinic", "doctor", "healthcare", "medical",
         "therapy", "emergency", "consultation", "patient", "wellness",
         "appointment", "diagnosis", "treatment", "surgery", "insurance",
         # IT / Auto Repair (YMYL Safety)
-        "pazienti", "dentista", "salute", "cura", "benessere",
+        "pazienti", "dentista", "sanità", "cura", "benessere",
         "medico", "clinica", "ospedale", "ambulatorio", "visita",
         "officina", "riparazione", "tagliando", "manutenzione",
-        "ricambi", "carrozzeria", "meccanico",
+        "ricambi", "carrozzeria", "meccanico", "patologia", "diagnostica"
     ],
 
     "local_legal_ymyl": [
@@ -55,10 +55,12 @@ PROFILE_KEYWORDS: dict[str, list[str]] = {
         "retail", "store", "buy", "product", "price",
         "discount", "collection", "order", "delivery", "warranty",
         "brand", "catalog", "marketplace", "dealership", "test drive", "showroom",
+        "grocery", "supermarket", "food", "organic", "bio", "supplements",
         # IT / Auto Retail
         "compra", "carrello", "spedizione", "prodotti", "negozio online",
         "acquista", "offerta", "sconto", "prezzo", "auto", "concessionaria",
         "veicoli", "usato", "nuovo", "pronta consegna",
+        "supermercato", "biologico", "naturale", "alimentare", "alimentari", "cibo", "spesa", "erboristeria"
     ],
 
     "hospitality_travel": [
@@ -107,7 +109,19 @@ PROFILE_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Negative Keywords Matrix — Subtracts points to prevent misclassification
+# ─────────────────────────────────────────────────────────────────────────────
 
+NEGATIVE_KEYWORDS: dict[str, list[str]] = {
+    "local_healthcare_ymyl": [
+        "bio", "biologico", "supermercato", "alimentare", "alimentari", "spesa", "grocery", 
+        "carrello", "checkout", "spedizione", "ecommerce", "negozio online", "naturasi", "naturale"
+    ],
+    "ecommerce_retail": [
+        "avvocato", "studio legale", "pazienti", "ospedale", "clinica", "terapia"
+    ]
+}
 # ─────────────────────────────────────────────────────────────────────────────
 # Evidence Blob Builder — collects all available text signals
 # ─────────────────────────────────────────────────────────────────────────────
@@ -192,6 +206,15 @@ def select_business_profile(
             if count > 0:
                 profile_score += count
                 matched_terms.append(f"{kw}({count})")
+
+        # Apply negative weighting
+        if profile_key in NEGATIVE_KEYWORDS:
+            for n_kw in NEGATIVE_KEYWORDS[profile_key]:
+                count = evidence_blob.count(n_kw.lower())
+                if count > 0:
+                    penalty = count * 3  # Apply strong penalty
+                    profile_score -= penalty
+                    matched_terms.append(f"NEG:{n_kw}(-{penalty})")
 
         scores[profile_key] = profile_score
         score_details[profile_key] = matched_terms

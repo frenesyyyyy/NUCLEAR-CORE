@@ -177,8 +177,14 @@ def _determine_acquisition_policy(fingerprint: dict) -> dict:
         max_pages = 3
         boosts = ["about", "contact", "services", "servizi", "chi siamo"]
     elif sc == "local_services":
-        max_pages = 4
+        max_pages = 6
         boosts = ["services", "servizi", "book", "prenota", "team", "faq", "trattamenti"]
+        boosts += [
+            "sedi", "locations", "clinics",
+            "specialita", "specialties",
+            "equipe", "team", "medici",
+            "faq", "documenti", "convenzioni"
+        ]
     elif sc == "saas":
         max_pages = 5
         boosts = ["pricing", "features", "integrations", "docs", "security", "prezzi"]
@@ -193,7 +199,7 @@ def _determine_acquisition_policy(fingerprint: dict) -> dict:
         boosts = ["about", "contact"]
         
     return {
-        "max_pages_to_fetch": min(max_pages, 5), # MAX GLOBAL LIMIT
+        "max_pages_to_fetch": min(max_pages, 6), # MAX GLOBAL LIMIT
         "boosted_page_tokens": boosts
     }
 
@@ -226,6 +232,12 @@ def _extract_and_score_links(soup: BeautifulSoup, base_url: str, policy: dict) -
             if g in href_lower or g in text:
                 score += 20
                 assigned_type = g if assigned_type == "internal" else assigned_type
+
+        if any(k in href_lower for k in ["sedi", "locations"]):
+            score += 60
+
+        if any(k in href_lower for k in ["specialita", "specialties"]):
+            score += 50
                 
         if score > 0:
             if full_url not in unique_links or unique_links[full_url]['score'] < score:
@@ -233,7 +245,7 @@ def _extract_and_score_links(soup: BeautifulSoup, base_url: str, policy: dict) -
                 
     sorted_links = sorted(unique_links.values(), key=lambda x: x['score'], reverse=True)
     needed = policy.get("max_pages_to_fetch", 3) - 1
-    return sorted_links[:max(0, needed)]
+    return sorted_links[:max(3, needed)]
 
 def _playwright_fetch(url: str) -> tuple[str, str]:
     """Execute a Playwright rendered fetch with fallback rendering capabilities."""
@@ -393,6 +405,24 @@ def _extract_metadata(soup: BeautifulSoup) -> dict:
     meta["twitter"] = tw
     
     return meta
+
+def _extract_legal_metadata(html: str) -> str:
+    """Extracts critical business footprints (P.IVA, PEC, REA) directly from raw HTML via regex."""
+    piva_match = re.search(r'(?:P\.IVA|Partita IVA|VAT(?:[\s]*ID)?|IVA|C\.F\.)[\s\:\.\-]*([0-9]{11})', html, re.IGNORECASE)
+    pec_match = re.search(r'([a-zA-Z0-9\.\-\_]+\@(?:pec|legalmail|cert)\.[a-zA-Z\.]{2,})', html, re.IGNORECASE)
+    rea_match = re.search(r'(?:REA)[\s\:\.\-]*([a-zA-Z]{2}\s*[\-]?\s*[0-9]{5,6})', html, re.IGNORECASE)
+    
+    findings = []
+    if piva_match:
+        findings.append(f"P.IVA: {piva_match.group(1)}")
+    if pec_match:
+        findings.append(f"PEC: {pec_match.group(1)}")
+    if rea_match:
+        findings.append(f"REA: {rea_match.group(1)}")
+        
+    if findings:
+        return f"\n\n[CRITICAL_METADATA_FOOTPRINT] {' | '.join(findings)}"
+    return ""
 
 def _execute_tier_fetch(url: str, locale_code: str, force_playwright: bool = False, max_time: int = 60) -> dict:
     """Encapsulates the 3-Tier fetch logic for a single URL."""
@@ -562,6 +592,12 @@ def process(state: dict) -> dict:
 
         # 5. Aggregate logic
         merged_clean = "\n\n".join(client_content_clean_parts)
+        
+        # Inject raw footprint directly into semantic clean string
+        legal_footprint = _extract_legal_metadata(hp_res["chosen_html"])
+        if legal_footprint:
+            merged_clean += legal_footprint
+            
         word_count = len(merged_clean.split())
         
         signals = _detect_semantic_signals(hp_soup, word_count, schema_counts=schema_type_counts)

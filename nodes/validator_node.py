@@ -223,7 +223,10 @@ def _compute_verdict(state: dict) -> tuple[str, str, list[str], list[str]]:
         auth_composite, schema_conf, integrity_status, consensus
     )
 
-    all_reasons = reasons + contra_reasons
+    if contra_reasons:
+        all_reasons = ["CONTRADICTION DETECTED:"] + contra_reasons + reasons
+    else:
+        all_reasons = reasons
     if blind_rate == 0: all_reasons.append("Zero blind discovery.")
 
     # Final readiness check
@@ -232,7 +235,7 @@ def _compute_verdict(state: dict) -> tuple[str, str, list[str], list[str]]:
     if is_really_ready:
         return "CLIENT READY", f"Ready: Conf {confidence}%, Gaps {len(penalized_gaps)}.", [], []
     
-    return "REQUIRES ANALYST REVIEW", " | ".join(all_reasons) if all_reasons else "Review required.", flags, contra_reasons
+    return "REQUIRES ANALYST REVIEW", " | ".join(all_reasons), flags, contra_reasons
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main Process

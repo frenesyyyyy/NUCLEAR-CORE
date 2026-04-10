@@ -383,6 +383,25 @@ def process(state: dict) -> dict:
     agency_query = f"""
     Analyze {target_industry} market for {url}{loc_context}. Scale: {scale_level}.
     {anti_noise} | {lang_instruction}
+    
+    Only generate topic_gaps that are:
+    - immediately relevant to assortment/category expansion
+    - representing realistic consumer search behavior (exact phrases people search)
+    - commercially useful within the next 6-12 months
+    
+    CRITICAL INTENT RULES:
+    Penalize and strictly exclude:
+    - overly niche, futuristic, or speculative content gaps
+    - generic lifestyle filler (e.g. "how to live a healthy lifestyle", "history of...")
+    
+    Instead, strongly prefer hardcore commercial and bottom-funnel intents:
+    - high-value category page structures
+    - product certification & sourcing queries (e.g., "organic verified producers")
+    - product-use cases directly tied to inventory
+    - delivery, logistics, & shipping expectations
+    - brand/product comparison matrices
+    - store-finder & local stock availability
+    
     Return JSON: competitor_entities (list of 8 proprietary brands), authority_entities (12 protocols/standards), topic_gaps (10), faq_patterns (5).
     """
 

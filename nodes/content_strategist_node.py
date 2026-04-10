@@ -125,43 +125,52 @@ def process(state: dict) -> dict:
     # Stage 1: assemble grounding context from all collected evidence
     grounding_context = _build_grounding_context(state)
 
-    prompt = f"""
-    You are a Senior GEO Content Auditor conducting an agency-grade audit.
-    Your goal is to convert extracted evidence into structured action opportunities.
+    try:
+        prompt = f"""
+        You are a Senior GEO Content Auditor conducting an agency-grade audit.
+        Your goal is to convert extracted evidence into structured action opportunities.
 
-    ## Collected Market Intelligence
-    {grounding_context}
+        ## Collected Market Intelligence
+        {grounding_context}
 
-    ## Target Website Evidence
-    URL: {url}
-    Detected Schema: {json.dumps(schema_objects)}
-    Content Length: {len(client_content)} chars
-    
-    ## Primary Extraction (First 12,000 chars)
-    {client_content[:12000]}
+        ## Target Website Evidence
+        URL: {url}
+        Detected Schema: {json.dumps(schema_objects)}
+        Content Length: {len(client_content)} chars
+        
+        ## Primary Extraction (First 12,000 chars)
+        {client_content[:12000]}
 
-    Identify the specific gaps that prevent this brand from being the "authoritative answer" for the target industry in AI search engines (GEO).
-    
-    RULES FOR ACTION GENERATION:
-    1. Every action MUST include:
-       - "evidence_origin": ("on_site" | "off_site" | "query_gap" | "profile_inference" | "mixed")
-       - "evidence_confidence": ("high" | "medium" | "low")
-       - "supporting_signals": [list of 1-3 concrete evidence strings]
-    2. Use "on_site" for signals discovered on this URL.
-    3. Use "query_gap" or "off_site" if market context shows a gap the site doesn't cover.
-    4. Use "profile_inference" if the recommendation is a best-practice for the industry but not directly triggered by a specific site-fail.
-    5. Generate at least 2-3 specific "missing_page_types".
-    6. Identify MUST-HAVE "trust_signal_gaps" for the specific locale (e.g., P.IVA/PEC for Italy).
+        Identify the specific gaps that prevent this brand from being the "authoritative answer" for the target industry in AI search engines (GEO).
+        
+        RULES FOR ACTION GENERATION:
+        1. Every action MUST include:
+           - "evidence_origin": ("on_site" | "off_site" | "query_gap" | "profile_inference" | "mixed")
+           - "evidence_confidence": ("high" | "medium" | "low")
+           - "supporting_signals": [list of 1-3 concrete evidence strings]
+        2. Use "on_site" for signals discovered on this URL.
+        3. Use "query_gap" or "off_site" if market context shows a gap the site doesn't cover.
+        4. Use "profile_inference" if the recommendation is a best-practice for the industry but not directly triggered by a specific site-fail.
+        5. Generate at least 2-3 specific "missing_page_types" and "discovery_intent_gaps". 
+           CRITICAL: These MUST be directly tied to commercial assortment expansion, category clarification, product-source validation, logistics/delivery, or localized store-finders. Strictly PENALIZE and exclude generic lifestyle editorial filler or overly speculative tech topics.
+        6. Identify MUST-HAVE "trust_signals" for the specific locale (e.g., P.IVA/PEC for Italy).
+           For each trust signal, strictly evaluate if it is:
+           - "missing": Completely absent from the site. Not found in text or code.
+           - "present_unstructured": Found loosely in HTML body text but not sufficiently exposed in strategic locations (like footer or semantic tags).
+           - "present_but_not_machine_readable": Exists structurally on the site but lacks formal Organization/LocalBusiness JSON-LD markup.
 
-    Return STRICT JSON with exactly these keys:
-    "missing_page_types": list of [page_name, why_needed, evidence_origin, evidence_confidence, supporting_signals]
-    "trust_signal_gaps": list of [signal, evidence_basis, evidence_origin, evidence_confidence, supporting_signals]
-    "discovery_intent_gaps": list of [intent, suggestion, evidence_origin, evidence_confidence, supporting_signals]
-    "entity_trust_gaps": list of [entity, relation, evidence_origin, evidence_confidence, supporting_signals]
-    "local_visibility_gaps": list of [gap, fix, evidence_origin, evidence_confidence, supporting_signals]
-    "competitor_gap_opportunities": list of [competitor_strength, our_counter_strategy, evidence_origin, evidence_confidence, supporting_signals]
-    "original_frameworks": list of proprietary methodologies actually present on this site.
-    """
+        Return STRICT JSON with exactly these keys:
+        "missing_page_types": list of [page_name, why_needed, evidence_origin, evidence_confidence, supporting_signals]
+        "trust_signal_gaps": list of objects: {{"signal": "str", "status": "missing|present_unstructured|present_but_not_machine_readable", "evidence_origin": "str", "evidence_confidence": "str", "supporting_signals": ["str"]}}
+        "discovery_intent_gaps": list of [intent, suggestion, evidence_origin, evidence_confidence, supporting_signals]
+        "entity_trust_gaps": list of [entity, relation, evidence_origin, evidence_confidence, supporting_signals]
+        "local_visibility_gaps": list of [gap, fix, evidence_origin, evidence_confidence, supporting_signals]
+        "competitor_gap_opportunities": list of [competitor_strength, our_counter_strategy, evidence_origin, evidence_confidence, supporting_signals]
+        "original_frameworks": list of proprietary methodologies actually present on this site.
+        """
+    except Exception as e:
+        console.print(f"[bold red]CRITICAL PROMPT RENDERING FAILURE[/bold red]: Invalid format specifier in template: {e}")
+        raise
     
     try:
         def _req():
@@ -191,7 +200,16 @@ def process(state: dict) -> dict:
         
         # Legacy/Support Output
         state["original_frameworks"] = output.get("original_frameworks", [])
-        state["e_e_a_t_gaps"] = [f"{g[0]}: {g[1]}" for g in output.get("trust_signal_gaps", [])] # for backward compat
+        
+        # backward compat for legacy lists
+        e_gaps = []
+        for g in output.get("trust_signal_gaps", []):
+            if isinstance(g, dict):
+                e_gaps.append(f"{g.get('signal', 'Unknown')}: {g.get('status', 'missing')}")
+            else:
+                e_gaps.append(f"{g[0]}: {g[1]}")
+        state["e_e_a_t_gaps"] = e_gaps
+        
         state["recommended_content"] = [f"{p[0]} ({p[1]})" for p in output.get("missing_page_types", [])]
         
         console.print(f"[green]Content Strategist Node[/green]: Successfully mapped {len(state['trust_signal_gaps'])} trust gaps and {len(state['missing_page_types'])} page opportunities.")

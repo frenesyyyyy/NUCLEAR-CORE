@@ -91,6 +91,12 @@ def run_hybrid_pipeline(initial_state: dict, run_mode: str = "standard") -> dict
 
     state = deepcopy(initial_state)
 
+    if run_mode == "agency":
+        state["agency_strict_mode"] = True
+        state["confidence_threshold"] = 70
+        state["suppress_low_confidence"] = True
+        state["contradiction_sensitivity"] = "high"
+
     truth_spine = [
         "content_fetcher",
         "orchestrator",

@@ -370,8 +370,23 @@ def _build_branded_queries(
     b = brand_name.strip()
     ind = target_industry.strip()
     loc = discovered_location.strip()
-    top_comp = competitor_entities[0].strip() if competitor_entities else ""
-    sec_comp = competitor_entities[1].strip() if len(competitor_entities) > 1 else ""
+    
+    # Self-comparison guard: deduplicate competitors who share the brand name
+    import re
+    import unicodedata
+    def _norm(name): 
+        n = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
+        return re.sub(r'[^\w\s]', '', n.lower().strip())
+    
+    b_norm = _norm(b)
+    valid_comps = []
+    for c in competitor_entities:
+        c_clean = c.strip()
+        if _norm(c_clean) and _norm(c_clean) != b_norm and c_clean not in valid_comps:
+            valid_comps.append(c_clean)
+            
+    top_comp = valid_comps[0] if valid_comps else ""
+    sec_comp = valid_comps[1] if len(valid_comps) > 1 else ""
 
     is_local = scale_level == "Local" and loc and loc.lower() not in ["worldwide", "national"]
 
@@ -950,6 +965,30 @@ def process(state: dict) -> dict:
         if profile_key in PLATFORM_LIKE_PROFILES:
             upstream_density = state.get("content_engineering", {}).get("evidence_density_score", 0)
             eg_score = max(eg_score, float(upstream_density))
+            
+        # Add Partial Credit Contributions
+        partial_credits = 0.0
+        if state.get("trust_signal_gaps") or state.get("missing_page_types"):
+            partial_credits += 10.0
+        if visibility_score > 0:
+            partial_credits += min(15.0, visibility_score * 0.2)
+        if state.get("external_data_quality") == "high":
+            partial_credits += 5.0
+        if state.get("schema_type_counts"):
+            partial_credits += 10.0
+        if state.get("client_content_depth", {}).get("extraction_quality") == "high":
+            partial_credits += 10.0
+            
+        eg_score = max(eg_score, partial_credits)
+        
+        # 6. Guard Logic: Never remain 0 if actionable evidence exists
+        has_strategist = bool(state.get("missing_page_types"))
+        has_schema = bool(state.get("schema_type_counts"))
+        has_trust = bool(state.get("e_e_a_t_gaps"))
+        has_query = bool(state.get("discovery_intent_gaps"))
+        
+        if (has_strategist or has_schema or has_trust or has_query) and eg_score < 15.0:
+            eg_score = max(eg_score, 15.0)
 
         metrics["Defensible Evidence Depth"] = int(min(100, max(0, eg_score)))
 

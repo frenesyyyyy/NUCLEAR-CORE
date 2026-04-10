@@ -125,7 +125,7 @@ def _render_model_analytics_section(analytics: dict) -> str:
     md += "\n---\n\n"
     return md
 
-def _render_agency_action_plan(blueprint: dict) -> str:
+def _render_agency_action_plan(blueprint: dict, agency_strict_mode: bool = False) -> str:
     """Render the Phased Agency Strategic Roadmap (30/60/90 Day)."""
     if not blueprint: return ""
     
@@ -161,10 +161,17 @@ def _render_agency_action_plan(blueprint: dict) -> str:
         if not actions: continue
         md += f"### {phase_name}\n"
         for act in actions:
+            if "evidence_origin" not in act:
+                continue
+                
+            confidence  = act.get("evidence_confidence", "low")
+            
+            if agency_strict_mode and confidence == "low":
+                continue
+
             title       = act.get("action_title", "Unnamed Action")
             why         = act.get("why_it_matters", "Strategic improvement")
             origin      = act.get("evidence_origin", "profile_inference")
-            confidence  = act.get("evidence_confidence", "low")
             signals     = act.get("supporting_signals", [])
             priority    = act.get("priority", "Medium")
             impact      = act.get("expected_impact", "High visibility lift")
@@ -172,7 +179,7 @@ def _render_agency_action_plan(blueprint: dict) -> str:
             md += f"#### **{title}**\n"
             md += f"- **Why this matters for visibility:** {why}\n"
             md += f"- **Expected Impact:** {impact}\n"
-            md += f"- **Evidence Basis:** {origin.replace('_', ' ').title()} ({confidence.title()} Confidence)\n"
+            md += f"- **Evidence Origin:** {origin.replace('_', ' ').title()} ({confidence.title()} Confidence)\n"
             if signals:
                 md += f"- **Supporting Signals:** {', '.join(signals)}\n"
             md += f"- **Priority:** {priority}\n\n"
@@ -388,7 +395,7 @@ def process(state: dict) -> dict:
         md_content += _render_content_eng_section(state.get("content_engineering", {}))
         md_content += _render_earned_media_section(state.get("earned_media", {}), state.get("source_taxonomy", {}))
         md_content += _render_model_analytics_section(state.get("model_analytics", {}))
-        md_content += _render_agency_action_plan(state.get("implementation_blueprint", {}))
+        md_content += _render_agency_action_plan(state.get("implementation_blueprint", {}), state.get("agency_strict_mode", False))
         md_content += _render_blueprint_section(state.get("implementation_blueprint", {}))
         md_content += _render_agentic_section(state.get("agentic_readiness", {}))
         

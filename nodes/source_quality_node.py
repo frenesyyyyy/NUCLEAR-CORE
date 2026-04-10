@@ -184,10 +184,12 @@ def process(state: dict) -> dict:
         elif legacy_bucket == "noise": noise_count += 1
         else: unclassified_count += 1
 
-    total_sources = sum([
+    classified_sources = sum([
         owned_count, earned_count, forum_count,
-        review_count, directory_count, unclassified_count
-    ]) # Exclude noise from total sources
+        review_count, directory_count
+    ])
+    effective_sources = classified_sources + min(unclassified_count, classified_sources)
+    total_sources = effective_sources # Exclude noise and cap unclassified
 
     first_party_inferred: list = earned_media.get("first_party_inferred_families", [])
 
