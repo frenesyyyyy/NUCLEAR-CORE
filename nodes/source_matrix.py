@@ -13,6 +13,7 @@ All data is deterministic and stateless. No external API calls.
 
 from __future__ import annotations
 from nodes.business_profiles import normalize_profile_key
+import copy
 
 # ─────────────────────────────────────────────────────────────────────────────
 # A. SOURCE FAMILY TAXONOMY
@@ -682,6 +683,9 @@ SOURCE_PACKS: dict[str, dict] = {
         }
     },
 }
+
+# Temporarily map specialty goods supplier to ecommerce_retail pack
+SOURCE_PACKS["specialty_goods_supplier"] = copy.deepcopy(SOURCE_PACKS["ecommerce_retail"])
 
 
 # Safe fallbacks for profiles not explicitly mapped

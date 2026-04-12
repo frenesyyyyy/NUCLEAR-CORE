@@ -69,7 +69,14 @@ PROFILE_SCHEMA_MAP: dict[str, list[dict[str, str]]] = {
         {"schema_type": "EducationalOrganization","page_type": "Homepage",   "rationale": "Establishes core institutional entity for AI Knowledge Graph."},
         {"schema_type": "Course",               "page_type": "Course Pages", "rationale": "Enables direct surfacing in 'best courses for [subject]' queries."},
         {"schema_type": "FAQPage",              "page_type": "Admissions",   "rationale": "Directly answers pre-enrollment informational queries."},
-    ]
+    ],
+    "specialty_goods_supplier": [
+        {"schema_type": "Product",              "page_type": "Product Pages","rationale": "Enables visibility for specific technical/industrial product queries."},
+        {"schema_type": "Offer",                "page_type": "Product Pages","rationale": "Powers transactional intent for unit-based or bulk pricing."},
+        {"schema_type": "AggregateOffer",       "page_type": "Product Pages","rationale": "Crucial for industrial suppliers with volume-based discount tiers."},
+        {"schema_type": "LocalBusiness",        "page_type": "Homepage",     "rationale": "Geo-anchors the supplier for regional distribution trust."},
+        {"schema_type": "Organization",         "page_type": "Homepage",     "rationale": "Establishes corporate authority and certification validation."},
+    ],
 }
 
 

@@ -374,7 +374,81 @@ BUSINESS_INTELLIGENCE_PROFILES = {
             "it": ["come fare domanda per università", "requisiti per studi"],
         },
     },
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 9. Specialty Goods / Industrial Supplier
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "specialty_goods_supplier": {
+        "label": "Specialty Goods / Industrial Supplier",
+        "macro_industry": "Industrial & Specialty Supplies",
+        "geo_behavior": "specification_driven",
+        "query_style": "specialized_utility",
+        "scale_default": "National",
+        "location_enforce": False,
+        "stress_test_budget": {"blind": 10, "contextual": 12, "branded": 8},
+        "serper_mode": "category_leaders",
+        "allowed_schema_types": [
+            "Product", "Offer", "AggregateOffer",
+            "LocalBusiness", "Organization", "FAQPage",
+        ],
+        "must_have_signals": [
+            "technical specifications", "bulk pricing", "certifications",
+            "delivery logistics", "B2B terms",
+        ],
+        "scoring_weights": {
+            "technical": 0.40,
+            "eeat_trust": 0.30,
+            "content_depth": 0.30,
+        },
+        "persona_templates": [
+            {"persona": "Procurement Officer", "intent": "bulk purchase"},
+            {"persona": "Technical Specialist", "intent": "specification matching"},
+            {"persona": "Facility Manager", "intent": "supply reliability"},
+        ],
+        "blind_fallback_templates": {
+            "en": [
+                "where to buy {core_noun}",
+                "best {core_noun} {quality_modifier}",
+                "{core_noun} delivery {location}",
+                "{core_noun} online",
+                "{core_noun} certified",
+                "{core_noun} for {use_case}",
+                "{core_noun} price",
+                "{core_noun} near me"
+            ],
+            "it": [
+                "dove comprare {core_noun}",
+                "miglior {core_noun} {quality_modifier}",
+                "{core_noun} consegna {location}",
+                "{core_noun} online",
+                "{core_noun} certificato",
+                "{core_noun} per {use_case}",
+                "{core_noun} prezzo",
+                "{core_noun} vicino a me"
+            ],
+        },
+        "contextual_fallback_templates": {
+            "en": [
+                "how to choose {core_noun}",
+                "{core_noun} {comparison_modifier} differences",
+                "{core_noun} which one to choose",
+                "{core_noun} how it works",
+                "how to verify {core_noun} {quality_modifier}",
+                "{core_noun} {packaging_modifier} convenience",
+                "{core_noun} for {use_case} which one to choose"
+            ],
+            "it": [
+                "come scegliere {core_noun}",
+                "{core_noun} {comparison_modifier} differenze",
+                "{core_noun} quale scegliere",
+                "{core_noun} come funziona",
+                "come verificare {core_noun} {quality_modifier}",
+                "{core_noun} {packaging_modifier} convenienza",
+                "{core_noun} per {use_case} quale scegliere"
+            ],
+        },
+    },
 }
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -477,3 +551,13 @@ def get_platform_like_profiles() -> set[str]:
 def get_local_trust_profiles() -> set[str]:
     """Returns canonical profiles tied to physical local footprints or local subjective trust/ratings."""
     return {"local_healthcare_ymyl", "local_legal_ymyl", "hospitality_travel", "professional_services"}
+
+
+def get_commerce_like_profiles() -> set[str]:
+    """Returns canonical profiles that involve selling physical goods."""
+    return {"ecommerce_retail", "specialty_goods_supplier"}
+
+
+def get_specialty_supplier_profiles() -> set[str]:
+    """Returns canonical profiles for niche technical/industrial suppliers."""
+    return {"specialty_goods_supplier"}

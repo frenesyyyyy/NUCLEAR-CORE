@@ -12,7 +12,7 @@ RUN_MODES = {
         "analytics_enabled": True,
     },
     "agency": {
-        "max_workers": 2,
+        "max_workers": 10,
         "parallel_enabled": True,
         "research_enabled": True,
         "analytics_enabled": True,

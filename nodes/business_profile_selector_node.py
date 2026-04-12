@@ -41,6 +41,33 @@ def process(state: dict) -> dict:
             extra_context=extra_context
         )
 
+        # ── MEDICAL SEMANTIC GUARD (B2B SAAS VETO) ──
+        if key == "b2b_saas_tech":
+            medical_anchors = [
+                "terapia del dolore", "centro medico", "clinica", "medico", "visite", 
+                "trattamenti", "paziente", "dolore cronico", "sciatalgia", "infiltrazioni", 
+                "agopuntura", "ernia del disco", "terapia", "visita"
+            ]
+            
+            # Build an aggregated evidence string for the medical check
+            evidence_str = (
+                str(target_industry).lower() + " " + 
+                str(business_type).lower() + " " + 
+                extra_context.get("page_title", "").lower() + " " + 
+                extra_context.get("og_tags", {}).get("og:description", "").lower() + " " + 
+                str(schema_type_counts).lower() + " " + 
+                extra_context.get("client_content_clean", "")[:5000].lower()
+            )
+            
+            # Count distinct medical anchors present
+            anchors_found = [a for a in medical_anchors if a in evidence_str]
+            if len(anchors_found) >= 2:
+                console.log(f"   [yellow]Medical Guard[/yellow] | {len(anchors_found)} medical anchors found {anchors_found}. Vetoing b2b_saas_tech.")
+                key = "local_healthcare_ymyl"
+                metadata["reliability"] = "high"
+                metadata["evidence"].append(f"Strong medical signals detected {anchors_found}. Overriding b2b_saas_tech classification to local_healthcare_ymyl.")
+
+
         # ── DEFENSIVE SEMANTIC GUARD (v4.5 Hotfix) ──
         if key in ("local_healthcare_ymyl", "local_legal_ymyl"):
             hazard_tokens = ["food", "delivery", "restaurant", "ristorante", "trattoria", "pizza", "burger", "meal", "menu"]
@@ -51,6 +78,21 @@ def process(state: dict) -> dict:
                 key = "hospitality_travel"
                 metadata["reliability"] = "low"
                 metadata["evidence"].append("Semantic boundary conflict detected (food/restaurant keywords found on putative YMYL entity). Hospitality fallback applied.")
+
+        # ── SPECIALTY GOODS TIE-BREAKER ──
+        if key == "ecommerce_retail":
+            specialty_signals = [
+                "pellet", "biomass", "fuel", "industrial", "wholesale", "bulk", 
+                "sfuso", "sacchi", "scheda tecnica", "certificato", "packaging", 
+                "formato", "agricultural", "supply", "distribuzione"
+            ]
+            evidence_str = str(target_industry).lower() + " " + str(business_type).lower() + " " + extra_context.get("client_content_clean", "")[:5000].lower()
+            
+            if any(s in evidence_str for s in specialty_signals):
+                console.log(f"   [yellow]Tie-breaker[/yellow] | Specialty signals detected! Overriding ecommerce_retail.")
+                key = "specialty_goods_supplier"
+                metadata["reliability"] = "high"
+                metadata["evidence"].append("Specialty/Industrial signals detected in site content. Overriding generic ecommerce classification.")
 
         # 4. Load the profile object safely preventing global template mutation
         profile = copy.deepcopy(BUSINESS_INTELLIGENCE_PROFILES.get(key, BUSINESS_INTELLIGENCE_PROFILES.get(DEFAULT_PROFILE_KEY)))

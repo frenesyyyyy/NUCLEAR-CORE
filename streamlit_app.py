@@ -393,7 +393,40 @@ def main():
                 if content_eng.get("thin_but_semantic"):
                     st.info("🔄 RESCUED: Thin content but high semantic density detected.")
 
-            # ── 5. Telemetry by Node ─────────────────────────────────────────
+            # ── 5. Query Construction & Discovery Reliability ────────────────
+            with st.expander("🔍 Query Construction & Discovery Reliability", expanded=True):
+                reliability = data.get("model_analytics", {}).get("tier_query_reliability", {})
+                
+                # Overall Confidence
+                conf_val = data.get("model_analytics", {}).get("query_construction_confidence", 0)
+                st.metric("Aggregate Query Construction Confidence", f"{conf_val}%")
+                
+                # Profile Veto Status
+                veto_active = data.get("profile_fallback_blocked_due_to_entity_conflict", False)
+                if veto_active:
+                    st.error("🚨 **PROFILE CONSISTENCY VETO**: Hardcoded profile templates were BLOCKED due to entity contradictions (e.g., Medical site vs SaaS profile).")
+                else:
+                    st.success("✅ **PROFILE ALIGNMENT**: No entity-profile contradictions detected.")
+                
+                # Tier Breakdown
+                if reliability:
+                    for tier, stats in reliability.items():
+                        st.markdown(f"##### {tier.replace('_', ' ').title()}")
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Accepted", stats.get("accepted_count", 0))
+                        c2.metric("Regen Rounds", stats.get("regeneration_rounds_used", 0))
+                        c3.metric("Regen Yield", stats.get("regenerated_query_count", 0))
+                        
+                        degraded = stats.get("generation_degraded", False)
+                        status = "🔴 DEGRADED" if degraded else "🟢 OPTIMAL"
+                        c4.metric("Status", status)
+                        
+                        if degraded:
+                            st.caption(f"Reason: Yield below minimum ({stats.get('accepted_count', 0)}/{stats.get('target_count', 5)}) after all regeneration efforts.")
+                else:
+                    st.info("No detailed reliability metrics found for this run.")
+
+            # ── 6. Telemetry by Node ─────────────────────────────────────────
             with st.expander("⏱️ Telemetry by Node"):
                 telem = data.get("execution_telemetry", [])
                 if telem:

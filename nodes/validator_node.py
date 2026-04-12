@@ -116,7 +116,8 @@ def _detect_contradictions(
     auth_composite: float,
     schema_conf: str,
     integrity_status: str,
-    consensus: float
+    consensus: float,
+    state: dict = None
 ) -> tuple[list[str], list[str]]:
     """ Detect discordant signals that force Analyst Review. """
     flags: list[str] = []
@@ -154,6 +155,19 @@ def _detect_contradictions(
         flags.append("C6")
         reasons.append("Visibility Shadow: Candidate is ready but remains invisible to all non-branded queries.")
 
+    # C7: Query Construction Degradation
+    tier_reliability = state.get("tier_query_reliability", {})
+    any_tier_degraded = any(
+        tr.get("generation_degraded", False)
+        for tr in tier_reliability.values()
+    )
+    if any_tier_degraded and (blind_rate == 0 or contextual_rate == 0):
+        flags.append("C7")
+        reasons.append(
+            "Query Construction Degradation: Low-confidence query construction may mask true visibility. "
+            "Discovery misses on degraded tiers are unreliable evidence."
+        )
+
     return flags, reasons
 
 def _compute_verdict(state: dict) -> tuple[str, str, list[str], list[str]]:
@@ -182,6 +196,10 @@ def _compute_verdict(state: dict) -> tuple[str, str, list[str], list[str]]:
     schema_conf = state.get("schema_confidence", "Low")
     trust_conf = state.get("trust_confidence", "Low")
 
+    # S8 check earlier for V4 relaxation
+    tier_reliability = state.get("tier_query_reliability", {})
+    any_tier_degraded = any(tr.get("generation_degraded", False) for tr in (tier_reliability or {}).values())
+
     # Phase 1: Hard Vetoes
     if integrity_status == "invalid":
         return "NOT CLIENT READY", "V1: Extraction failed.", [], []
@@ -189,8 +207,20 @@ def _compute_verdict(state: dict) -> tuple[str, str, list[str], list[str]]:
         return "NOT CLIENT READY", "V2: No on-site evidence.", [], []
     if confidence < 40:
         return "NOT CLIENT READY", f"V3: Confidence low ({confidence}%).", [], []
+    
+    # V4: Zero Discovery (Refined for Resilience)
     if blind_rate == 0 and contextual_rate == 0:
-        return "NOT CLIENT READY", "V4: Zero discovery.", [], []
+        # Check if T3 (branded) matched - branded alone doesn't count as discovery
+        branded_matched = tier_stats.get("branded_validation", {}).get("matches", 0) > 0
+        
+        if not any_tier_degraded:
+            # Verified Zero Discovery on valid construction
+            return "NOT CLIENT READY", "V4: Zero discovery (Verified).", [], []
+        else:
+            # Construction was degraded - V4 becomes a soft veto (reconciled in Phase 2/4)
+            reasons.append("S8 (V4 Relaxed): Discovery is zero, but query construction was degraded. Result is inconclusive.")
+            state["partial_data_verdict_adjustment_reason"] = "V4 Veto relaxed due to construction degradation."
+
 
     # Phase 2: Soft Vetoes (Accumulation)
     if confidence < 70:
@@ -212,6 +242,15 @@ def _compute_verdict(state: dict) -> tuple[str, str, list[str], list[str]]:
         if (blind_rate + contextual_rate) / 2 < 20:
             reasons.append("S7: Local discovery rate low.")
 
+    # S8: Query construction degradation
+    tier_reliability = state.get("tier_query_reliability", {})
+    any_tier_degraded = any(
+        tr.get("generation_degraded", False)
+        for tr in tier_reliability.values()
+    )
+    if any_tier_degraded:
+        reasons.append("S8: Query construction degraded — discovery results carry reduced confidence.")
+
     # Phase 4 Candidate (Pre-Contradiction)
     is_ready = (len(reasons) == 0 and confidence >= 70 and len(penalized_gaps) < 2)
     candidate_verdict = "CLIENT READY" if is_ready else "REQUIRES ANALYST REVIEW"
@@ -220,7 +259,8 @@ def _compute_verdict(state: dict) -> tuple[str, str, list[str], list[str]]:
     flags, contra_reasons = _detect_contradictions(
         candidate_verdict, confidence, penalized_gaps, trust_mix, 
         trust_conf, blind_rate, contextual_rate, 
-        auth_composite, schema_conf, integrity_status, consensus
+        auth_composite, schema_conf, integrity_status, consensus,
+        state=state
     )
 
     if contra_reasons:

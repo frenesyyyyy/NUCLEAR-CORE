@@ -13,19 +13,47 @@ from nodes.business_profiles import DEFAULT_PROFILE_KEY, normalize_profile_key, 
 
 console = Console()
 
-def _calculate_share_of_model(stress_test_log: list[dict], tier_stats: dict = None, show_placeholders: bool = False) -> dict[str, Any]:
+def _calculate_share_of_model(
+    stress_test_log: list[dict], 
+    tier_stats: dict = None, 
+    show_placeholders: bool = False,
+    tier_reliability: dict = None,
+    authority_composite: float = 0.0
+) -> dict[str, Any]:
     """
-    Calculate the share of visibility percentage per model and include tiered metrics.
+    Calculate discovery visibility with partial-failure resilience.
+    Distinguishes observed matches from inferred support.
     """
+    # 1. Observed Visibility (Direct discovery evidence)
     total_pts = sum(q.get("max_pts", 0) for q in stress_test_log)
     earned_pts = sum(q.get("points", 0) for q in stress_test_log)
+    observed_visibility = round((earned_pts / total_pts * 100) if total_pts > 0 else 0.0, 2)
     
-    if total_pts == 0 and not stress_test_log:
-        perplexity_share = "N/A (Extraction Failed)"
-    else:
-        perplexity_share = round((earned_pts / total_pts * 100) if total_pts > 0 else 0.0, 2)
+    # 2. De-collapse Logic: Partial Data Support
+    any_degraded = any(tr.get("generation_degraded", False) for tr in (tier_reliability or {}).values())
+    partial_data = any_degraded or (total_pts == 0 and stress_test_log)
+    
+    # If discovery is zero but authority is strong AND construction was degraded,
+    # we provide a 'support score' to prevent total report collapse.
+    support_score = 0.0
+    recalc_reason = None
+    
+    if observed_visibility == 0 and any_degraded:
+        # Inferred support based on off-site signals when discovery construction failed
+        support_score = round(authority_composite * 0.15, 2) # Max 15% inferred
+        recalc_reason = "Inferred from partial tier yield (Construction Degraded)"
+    elif any_degraded:
+        recalc_reason = "Tiers partially degraded; visibility carries lower confidence."
+
+    final_visibility = max(observed_visibility, support_score)
+    
     results = {
-        "Live AI Search": perplexity_share,
+        "Live AI Search": final_visibility,
+        "observed_visibility_score": observed_visibility,
+        "partial_data_support_score": support_score,
+        "final_visibility_score": final_visibility,
+        "partial_data": partial_data,
+        "recalc_reason": recalc_reason,
         "tier_metrics": tier_stats or {}
     }
     
@@ -80,6 +108,39 @@ def _estimate_position_adjusted_metrics(stress_test_log: list[dict]) -> int:
             
     return total_estimated_words
 
+
+def _apply_provenance_weighting(stress_test_log: list[dict]) -> dict:
+    """
+    Weight discovery outcomes by query provenance quality.
+    model queries weight 1.0, entity_fallback 0.7, profile_fallback 0.4.
+    Returns dict with weighted_earned, weighted_total, weighted_visibility_pct.
+    """
+    PROVENANCE_WEIGHTS = {
+        "model": 1.0,
+        "entity_fallback": 0.7,
+        "profile_fallback": 0.4,
+    }
+    
+    weighted_earned = 0.0
+    weighted_total = 0.0
+    
+    for q in stress_test_log:
+        source = q.get("source", "model")
+        w = PROVENANCE_WEIGHTS.get(source, 1.0)
+        max_pts = q.get("max_pts", 0)
+        earned_pts = q.get("points", 0)
+        
+        weighted_total += max_pts * w
+        weighted_earned += earned_pts * w
+    
+    weighted_pct = round((weighted_earned / weighted_total * 100) if weighted_total > 0 else 0.0, 2)
+    
+    return {
+        "weighted_earned": round(weighted_earned, 2),
+        "weighted_total": round(weighted_total, 2),
+        "weighted_visibility_pct": weighted_pct,
+    }
+
 def _generate_engine_risks(
     perplexity_share: float,
     tier_stats: dict,
@@ -106,6 +167,48 @@ def _generate_engine_risks(
 
     return risks
 
+
+def _normalize_log_entries(log: list[dict]) -> tuple[list[dict], int]:
+    """
+    Defensive normalization for analytics stability.
+    Ensures every entry has points, max_pts, and tier.
+    Returns (normalized_log, repair_count).
+    """
+    normalized = []
+    repair_count = 0
+    for entry in log:
+        if not isinstance(entry, dict):
+            repair_count += 1
+            continue
+            
+        is_repaired = False
+        tier = entry.get("tier", "unknown")
+        pts = entry.get("points")
+        max_pts = entry.get("max_pts")
+        
+        if pts is None:
+            pts = (entry.get("max_pts") if entry.get("matched") else 0) or 0
+            is_repaired = True
+            
+        if max_pts is None:
+            # Fallback based on tier
+            max_pts = 25 if tier == "blind_discovery" else (15 if tier == "contextual_discovery" else 20)
+            is_repaired = True
+            
+        if tier == "unknown":
+            is_repaired = True
+            
+        norm = entry.copy()
+        norm["points"] = pts
+        norm["max_pts"] = max_pts
+        norm["tier"] = tier
+        norm["source"] = entry.get("source", "unknown")
+        
+        if is_repaired: repair_count += 1
+        normalized.append(norm)
+        
+    return normalized, repair_count
+
 def process(state: dict) -> dict:
     """
     Generate model-aware GEO analytics summary.
@@ -117,21 +220,22 @@ def process(state: dict) -> dict:
 
     stress_test_log = state.get("stress_test_log", [])
     tier_stats      = state.get("stress_test_tier_stats", {})
+    
+    # -- DEFENSIVE SCHEMA NORMALIZATION --
+    stress_test_log, repair_count = _normalize_log_entries(stress_test_log)
+    if repair_count > 0:
+        console.print(f"      [yellow]SCHEMA_REPAIR[/yellow] Successfully normalized {repair_count} inconsistent log entries.")
+    
     earned_media    = state.get("earned_media", {})
     source_taxonomy = state.get("source_taxonomy", {})
     profile_key     = state.get("business_profile_key", DEFAULT_PROFILE_KEY)
     profile_key     = normalize_profile_key(profile_key)
     rep_risk        = earned_media.get("reputation_risk_score", 0)
 
-    # 1. Tiered Share of Model (Raw Visibility)
-    share_of_model = _calculate_share_of_model(stress_test_log, tier_stats, show_placeholder_engines)
-    perp_share = share_of_model.get("Live AI Search", 0.0)
-    raw_visibility_score = perp_share if isinstance(perp_share, (int, float)) else 0.0
-
-    # 2. Authority Composite (Conservative)
-    # Blends on-site semantic consensus with off-site authority
+    # Authority Composite (Conservative) - Calculate early for visibility resilience
     auth_match = state.get("authority_match_score", 0)
     brand_strength = earned_media.get("profile_aware_strength", earned_media.get("strength_score", 0))
+    tier_reliability = state.get("tier_query_reliability", {})
     
     PLATFORM_LIKE_PROFILES = get_platform_like_profiles()
     inferred_families = state.get("earned_media", {}).get("first_party_inferred_families", [])
@@ -141,11 +245,39 @@ def process(state: dict) -> dict:
             conf = f.get("confidence", "low")
             if conf == "high": rescue_pts += 12
             elif conf == "medium": rescue_pts += 8
-        
         brand_strength = min(100, brand_strength + min(24, rescue_pts))
 
     # 60% weight to off-site strength (trust), 40% to on-site authority matching (relevance)
     authority_composite = (auth_match * 0.4) + (brand_strength * 0.6)
+
+    # 1. Tiered Share of Model (Raw Visibility) with Resilience
+    share_of_model = _calculate_share_of_model(
+        stress_test_log, tier_stats, show_placeholder_engines, 
+        tier_reliability=tier_reliability, authority_composite=authority_composite
+    )
+    
+    perp_share = share_of_model.get("Live AI Search", 0.0)
+    raw_visibility_score = perp_share if isinstance(perp_share, (int, float)) else 0.0
+    
+    # 1b. Provenance-Weighted Visibility
+    provenance_metrics = _apply_provenance_weighting(stress_test_log)
+    provenance_weighted_visibility = provenance_metrics["weighted_visibility_pct"]
+
+    # 1c. Degradation-Aware Confidence Reduction
+    any_degraded = share_of_model.get("partial_data", False)
+    degradation_factor = 0.8 if any_degraded else 1.0
+    
+    # Apply degradation factor to raw visibility
+    raw_visibility_score = raw_visibility_score * degradation_factor
+    
+    # Compute aggregate query construction confidence
+    reliability_values = [
+        tr.get("query_construction_reliability", 1.0)
+        for tr in (tier_reliability or {}).values()
+    ]
+    query_construction_confidence = round(
+        sum(reliability_values) / max(len(reliability_values), 1) * 100, 1
+    )
 
     # 3. Authority-Adjusted Visibility
     # Uses the prescribed scaling to prevent zero-crush where discovery works but authority is developing
@@ -189,7 +321,8 @@ def process(state: dict) -> dict:
             "status": "Live",
             "visibility_score": authority_adjusted_visibility_score,  # Adjusted used for downstream perception
             "raw_visibility_score": raw_visibility_score,
-            "confidence": "High (Direct Evidence)"
+            "confidence": "High (Direct Evidence)" if not any_degraded else "Medium (Partial Yield)",
+            "recalc_reason": share_of_model.get("recalc_reason")
         }
     ]
     
@@ -213,10 +346,30 @@ def process(state: dict) -> dict:
     # 9. Notes
     notes = f"Profile-aware recalibration applied '{profile_key}'. Raw visibility {raw_visibility_score}% adjusted to {authority_adjusted_visibility_score:.1f}% based on auth composite {authority_composite:.1f}. "
     notes += f"Score dynamically adjusted using the [{profile_key}] weighting matrix to prevent structural bias. "
+    
+    recalc_reason = share_of_model.get("recalc_reason")
+    if recalc_reason:
+        notes += f"RECALC NOTE: {recalc_reason} "
+    
+    if any_degraded:
+        notes += "DEGRADATION NOTE: Query construction was degraded for one or more tiers — visibility estimates carry reduced confidence. "
     if not show_placeholder_engines:
         notes += "Only Live AI Search evidence is currently integrated."
 
-    state["model_analytics"] = {
+    # Reliability note for downstream nodes
+    query_reliability_note = None
+    if any_degraded:
+        degraded_tiers = [
+            k for k, v in tier_reliability.items()
+            if v.get("generation_degraded", False)
+        ]
+        query_reliability_note = (
+            f"Discovery estimates are based on reduced-confidence query construction "
+            f"due to limited valid query yield in tier(s): {', '.join(degraded_tiers)}."
+        )
+    state["query_construction_reliability_note"] = query_reliability_note
+
+    model_analytics = {
         "share_of_model": share_of_model,
         "tier_metrics": tier_stats,
         "engine_breakdown": engine_breakdown,
@@ -225,12 +378,25 @@ def process(state: dict) -> dict:
         "engine_specific_risks": engine_risks,
         "stress_test_diagnostics": state.get("stress_test_diagnostics", {}),
         "raw_visibility_score": raw_visibility_score,
+        "observed_visibility_score": share_of_model.get("observed_visibility_score", 0.0),
+        "partial_data_support_score": share_of_model.get("partial_data_support_score", 0.0),
+        "final_visibility_score": share_of_model.get("final_visibility_score", 0.0),
+        "partial_data": any_degraded,
+        "recalc_reason": share_of_model.get("recalc_reason"),
         "authority_adjusted_visibility_score": round(authority_adjusted_visibility_score, 2),
         "authority_composite": round(authority_composite, 2),
         "profile_weight_pack_used": profile_key,
         "geo_optimization_score": round(geo_score, 2),
-        "notes": notes
+        "provenance_weighted_visibility": provenance_metrics,
+        "query_construction_confidence": query_construction_confidence,
+        "tier_query_reliability": tier_reliability,
+        "notes": notes,
+        "schema_integrity": "repaired" if repair_count > 0 else "clean"
     }
+    if repair_count > 0:
+        model_analytics["schema_reliability_note"] = f"Analytics corrected {repair_count} malformed schema entries."
+        
+    state["model_analytics"] = model_analytics
 
     console.print(f"   [green]Model Analytics Complete[/green] | Adjusted Vis: {authority_adjusted_visibility_score:.1f}% | Auth Composite: {authority_composite:.1f}")
     return state

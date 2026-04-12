@@ -121,7 +121,21 @@ def _render_model_analytics_section(analytics: dict) -> str:
         md += "\n### Engine specific risks:\n"
         for r in risks["Live AI Search"][:2]:
             md += f"- {r}\n"
-            
+
+    # Query Construction Reliability Warning
+    tier_reliability = analytics.get("tier_query_reliability", {})
+    for t_key, rel in tier_reliability.items():
+        if rel.get("generation_degraded", False):
+            label = {
+                "blind_discovery": "Blind Discovery (T1)",
+                "contextual_discovery": "Contextual Discovery (T2)",
+            }.get(t_key, t_key)
+            md += "\n> [!WARNING]\n"
+            md += f"> **REDUCED QUERY CONFIDENCE [{label}]**: Discovery estimates for {label} are based on \n"
+            md += f"> reduced-confidence query construction due to limited valid query yield "
+            md += f"({rel.get('accepted_count', 0)}/{rel.get('target_count', 5)} target). "
+            md += "Visibility gaps may be overstated.  \n"
+
     md += "\n---\n\n"
     return md
 
@@ -316,6 +330,12 @@ def process(state: dict) -> dict:
             md_content += "> **Action:** This audit requires manual analyst validation to resolve conflicting metrics.  \n\n"
 
         md_content += "---\n\n"
+
+        # ── Query Construction Reliability Note ────────────────────────────────
+        qc_note = state.get("query_construction_reliability_note")
+        if qc_note:
+            md_content += "> [!NOTE]\n"
+            md_content += f"> **Query Reliability**: {qc_note}  \n\n"
 
         # 3b. Agency Decision Summary — Strict render of validator outputs only
         decision_risks = state.get("decision_risks", [])

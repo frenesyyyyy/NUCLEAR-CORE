@@ -1,0 +1,49 @@
+**TASK: SURGICAL RECALIBRATION OF PLATFORM VISIBILITY PIPELINE**
+
+**TARGET FILES:**
+1. `nodes/researcher_node.py`
+2. `nodes/validator_node.py`
+3. `nodes/model_analytics_node.py`
+4. `nodes/earned_media_node.py`
+
+**CONSTRAINTS:**
+- Deterministic math only. No LLM prompt alterations (use hard floors).
+- No new keys; use existing state payloads.
+- No brand fame overrides.
+
+**REQUIRED CHANGES:**
+
+**1. `nodes/researcher_node.py` (Line ~850 - Defensible Evidence Depth)**
+The LLM evaluates platforms using a B2B "frameworks" rubric, returning low scores. We must inject the profile-aware `evidence_density_score` computed upstream as a deterministic mathematical floor.
+*Action:* After `eg_score = float(ig_match.group(0))`, add:
+```python
+        # Ensure platforms aren't crushed by the B2B "Original Frameworks" LLM rubric
+        profile_key = state.get("business_profile_key", "b2b_saas")
+        if profile_key in {"marketplace", "consumer_saas", "ecommerce_brand"}:
+            upstream_density = state.get("content_engineering", {}).get("evidence_density_score", 0)
+            eg_score = max(eg_score, float(upstream_density))
+```
+
+**2. `nodes/validator_node.py` (Line ~61 - `_compute_data_confidence`)**
+First-party ecosystem metadata doesn't currently count towards structural citations, crashing platform confidence limits.
+*Action:* Update the `citations = ...` line:
+```python
+    inferred_count = len(state.get("earned_media", {}).get("first_party_inferred_families", []))
+    citations = taxonomy.get("owned_count", 0) + taxonomy.get("earned_count", 0) + taxonomy.get("review_count", 0) + taxonomy.get("directory_count", 0) + (inferred_count * 3)
+```
+
+**3. `nodes/model_analytics_node.py` (Line ~132 - `brand_strength`)**
+External search often drops App Store URLs. We must allow first-party ecosystem metadata (detected by `source_quality_node`) to rescue `brand_strength` deterministically for platforms.
+*Action:* Modify the `brand_strength` extraction:
+```python
+    brand_strength = earned_media.get("profile_aware_strength", earned_media.get("strength_score", 0))
+    # Platform validation: Convert first-party inferred structural ecosystems into tangible off-site strength
+    inferred_families = state.get("earned_media", {}).get("first_party_inferred_families", [])
+    if profile_key in PLATFORM_PROFILES and inferred_families:
+        brand_strength = min(100, brand_strength + (len(inferred_families) * 20))
+```
+*(Note: ensure `PLATFORM_PROFILES` is defined or re-defined above this block since you use it on line 138).*
+
+**4. `nodes/earned_media_node.py` (Line ~23)**
+Clean up dead code mismatch.
+*Action:* Remove the `compute_profile_aware_strength` import from `nodes.source_matrix` as the function does not exist and creates a false impression of downstream scaling.

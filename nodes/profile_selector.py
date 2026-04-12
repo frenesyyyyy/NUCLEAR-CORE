@@ -107,6 +107,18 @@ PROFILE_KEYWORDS: dict[str, list[str]] = {
         "corsi", "università", "laurea", "studenti", "academy", "master",
         "formazione", "docenti", "campus", "lezioni", "iscrizione",
     ],
+
+    "specialty_goods_supplier": [
+        # EN
+        "pellets", "biomass", "heating fuel", "industrial supply", "specialty chemicals",
+        "agricultural inputs", "technical goods", "bulk", "wholesale", "distributor",
+        "raw materials", "components", "packaging", "certification", "iso", "standard",
+        "specifications", "datasheet", "msds", "bulk pricing", "freight",
+        # IT
+        "pellet", "biomasse", "combustibile", "fornitura industriale", "prodotti tecnici",
+        "sfuso", "sacchi", "kg", "litri", "formato", "certificato", "scheda tecnica",
+        "qualità", "consegna", "distributore", "confezionamento", "ingrosso", "compatibilità",
+    ],
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -239,6 +251,9 @@ def select_business_profile(
         "NewsArticle":         ("publisher_media", 3),
         "BlogPosting":         ("publisher_media", 2),
         "ProfessionalService": ("professional_services", 3),
+        # Distributed bonuses for specialty suppliers
+        "LocalBusiness":       ("specialty_goods_supplier", 1),
+        "Organization":        ("specialty_goods_supplier", 1),
     }
 
     for schema_type, count in schema_type_counts.items():
